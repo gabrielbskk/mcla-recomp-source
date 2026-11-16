@@ -20,12 +20,11 @@
 3. Licença é **GPL-3.0-or-later**: build público exige fonte correspondente. O README público traz oferta escrita (GPLv3 §6(b)) e a promessa vale por 3 anos por build.
 4. Não apagar nada sem autorização explícita; instalações/repos só com autorização; não abrir o jogo sem pedido.
 
-### Release pendente
+### Release final
 
-- `v0.1.64` existe como **rascunho** no repo público, com `MCLA-v0.1.64-lsfg-pacer-mailbox.apk` já anexado (113.329.530 bytes, sha256 `c6bea39228976be833dc1f42fb3c70d1f78edc574d6887e8e5614a2ad96c55fa`).
-- Publicar só depois de validar em jogo:
-  `gh release edit v0.1.64 -R gabrielbskk/mcla-recomp-rv --draft=false --prerelease`
-- v64 não foi testada em jogo nem enviada ao netbook (`ssh mcla-cloud`, `/home/void/MCLA-RECOMP-RV-/MCLA-APKs/`).
+- **v0.1.61** publicada como **release final** no repo público — "This is the final public release. Development is paused indefinitely. I'm stepping away from recompilation work and AI-related projects due to internal circumstances. The private repository will remain but no further public builds are planned. No ETA for any future work."
+- Issues fechadas (6/6) com contato Discord `gabrielbskk`
+- CHANGELOG e README atualizados com aviso de pausa definitiva
 
 ### Build hardened v0.1.61 (2026-11-16)
 
