@@ -27,6 +27,24 @@
   `gh release edit v0.1.64 -R gabrielbskk/mcla-recomp-rv --draft=false --prerelease`
 - v64 não foi testada em jogo nem enviada ao netbook (`ssh mcla-cloud`, `/home/void/MCLA-RECOMP-RV-/MCLA-APKs/`).
 
+### Build hardened v0.1.61 (2026-11-16)
+
+APK normal **hardened** publicado no Download e no netbook:
+
+| Campo | Valor |
+| --- | --- |
+| Arquivo | `MCLA-NORMAL-v0.1.61-hardened.apk` |
+| Tamanho | 52 MB (vs 112 MB original — strip + R8) |
+| SHA-256 | `277430ede257abd57fb91e82fa5854c3d6aa65d92d806600d6ca2a6b48b318c3` |
+| Keystore | Release RSA 3072 (`out/release-keys/mcla-release.keystore`, alias `mcla-release`) |
+| Assinatura | v1 + v2 + v3 |
+| Native libs | Strip `--strip-unneeded` (libmain.so 82→34.9 MB, sem `.debug_*`, `.symtab`) |
+| Java | R8 full mode + `android/proguard-rules.pro` (ofuscação, remoção código morto) |
+| Anti-tamper | `AntiTamper.verifySignature(this)` em `MclaLauncherActivity.onCreate`; hash do cert SHA-256 embutido (`nsYCX6oRoiMcwiaLy4eZiCaL3UWKZsZ2rdx0dHr+AWQ=`) |
+| Variante | Normal (sem LSFG), code 61 |
+
+Script: `scripts/build_android_apk_hardened.sh` (usa `MCLA_VERSION_CODE=61 MCLA_VERSION_NAME=0.1.61-hardened`).
+
 ### O que nunca esteve público
 
 LSFG/DXBC, `Lossless.dll`, shader packs, drivers de GPU, keystore e ferramentas de diagnóstico. `git grep -i 'lsfg|Lossless'` no `main` público retornava vazio antes do split. O código antigo segue no histórico público e nos forks `contatg/mcla-recomp-forkbr` e `Rydev-pc/mcla-recomp-rv-helio-g85` — o split é apresentação, não sigilo retroativo.
