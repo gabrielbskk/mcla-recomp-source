@@ -1,6 +1,7 @@
 #include "generated/default/mcla_init.h"
 
 #include "mcla_app.h"
+#include "android_diagnostics.h"
 #include "automatic_api.h"
 #include "pc_triggers.h"
 #include "fps_counter.h"
@@ -8,6 +9,8 @@
 #include <cstdint>
 #include <chrono>
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,8 +18,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -59,7 +64,7 @@
 #ifdef __ANDROID__
 REXCVAR_DECLARE(int32_t, mcla_fps);  // Defined in frame_timing.cpp.
 REXCVAR_DEFINE_BOOL(mcla_fps_overlay, true, "MCLA",
-                    "Show successful host-present FPS (not guest swaps or display scanout)");
+                    "Show game update rate and interval p95 (not display scanout)");
 REXCVAR_DEFINE_BOOL(mcla_fps_log, true, "MCLA",
                     "Log host-present FPS and interval percentiles every five seconds");
 #endif
@@ -863,6 +868,10 @@ void MclaApp::OnPreSetup(rex::RuntimeConfig& config) {
   ApplyPcDefaults();
   MclaMigrateAntiAliasing();
   MclaApplyPreset();
+#ifdef __ANDROID__
+  const char* lsfg = std::getenv("REX_MCLA_LSFG");
+  rex::cvar::SetFlagFromCommandLine("frame_generation", lsfg && std::strcmp(lsfg, "1") == 0 ? "lsfg" : "off");
+#endif
 #ifdef _WIN32
   // The GPU the game chose (ChooseGpu) is the one the SDK takes, whatever the API: d3d12_adapter
   // for Direct3D 12, vulkan_device for Vulkan (Automatic's or the player's), whose own choice
@@ -1186,6 +1195,10 @@ void MclaApp::OnGuestThreadExit(rex::system::XThread* thread) {
 }
 
 void MclaApp::OnPostSetup() {
+  StartFpsTelemetry();
+#if defined(MCLA_ADRENO_DIAGNOSTIC_APK)
+  mcla::diagnostics::Start();
+#endif
   ConfigureFrameTiming();
   FollowCursorSetting();
 
@@ -1206,46 +1219,31 @@ namespace {
 class FpsCounter final : public rex::ui::ImGuiDialog {
  public:
   explicit FpsCounter(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
-  // OnDraw samples the presenter and writes the periodic log. Without UI
-  // repaints neither happens if the guest presents off the UI thread.
-  bool RepaintsContinuously() const override {
-    return REXCVAR_GET(mcla_fps_overlay) || REXCVAR_GET(mcla_fps_log);
+  // Dialogs exist before Runtime::Setup. Publish the initialized runtime to
+  // this worker only from OnPostSetup, not from the dialog constructor.
+  void Start(rex::ui::WindowedAppContext& context) {
+    if (worker_.joinable()) return;
+    worker_ = std::thread([this, &context] { Run(context); });
   }
+  ~FpsCounter() override {
+    callbacks_->active.store(false);
+    {
+      std::lock_guard lock(stop_mutex_);
+      stopping_ = true;
+    }
+    stop_cv_.notify_one();
+    if (worker_.joinable()) worker_.join();
+  }
+  // Never feed the SDL paint-event loop from OnDraw, even in diagnostic builds.
+  // A bounded timer requests HUD refreshes; logging does not need any paints.
+  bool RepaintsContinuously() const override { return false; }
 
  protected:
   void OnDraw(ImGuiIO&) override {
+#if defined(MCLA_ADRENO_DIAGNOSTIC_APK)
+    mcla::diagnostics::RecordUiPaint();
+#endif
     const bool overlay = REXCVAR_GET(mcla_fps_overlay);
-    const bool logging = REXCVAR_GET(mcla_fps_log);
-    if (!overlay && !logging) return;
-    const auto now = std::chrono::steady_clock::now();
-    if (now - sampled_ >= std::chrono::milliseconds(500)) {
-      sampled_ = now;
-      auto* runtime = rex::Runtime::instance();
-      auto* graphics = runtime ? runtime->graphics_system() : nullptr;
-      auto* presenter = graphics ? graphics->presenter() : nullptr;
-      if (!presenter) return;
-      auto times = presenter->GetRecentPresentationTimes();
-      const uint64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-          now.time_since_epoch()).count();
-      const uint64_t cutoff = now_ns > 2'000'000'000 ? now_ns - 2'000'000'000 : 0;
-      times.erase(times.begin(), std::lower_bound(times.begin(), times.end(), cutoff));
-      fps_ = p50_ = p95_ = 0;
-      if (times.size() >= 2 && times.back() > times.front()) {
-        fps_ = double(times.size() - 1) * 1e9 / double(times.back() - times.front());
-        std::vector<double> intervals;
-        for (size_t i = 1; i < times.size(); ++i) {
-          intervals.push_back(double(times[i] - times[i - 1]) / 1e6);
-        }
-        std::sort(intervals.begin(), intervals.end());
-        p50_ = intervals[(intervals.size() - 1) / 2];
-        p95_ = intervals[(intervals.size() * 95 + 99) / 100 - 1];
-      }
-      if (logging && now - logged_ >= std::chrono::seconds(5)) {
-        logged_ = now;
-        REXLOG_INFO("host presentation (recent 2s): {:.2f} FPS, p50 {:.2f} ms, p95 {:.2f} ms; "
-                    "{} samples, not display scanout", fps_, p50_, p95_, times.size());
-      }
-    }
     if (overlay) {
       char text[80];
       const auto game = mcla::GetGameUpdateStats();
@@ -1264,8 +1262,74 @@ class FpsCounter final : public rex::ui::ImGuiDialog {
   }
 
  private:
-  std::chrono::steady_clock::time_point sampled_{}, logged_{};
-  double fps_ = 0, p50_ = 0, p95_ = 0;
+  struct CallbackState {
+    std::atomic<bool> active{true};
+    std::atomic<bool> pending{false};
+  };
+
+  void Run(rex::ui::WindowedAppContext& context) {
+    REXLOG_INFO("FPS telemetry: independent 5s logging; HUD refresh requests capped at 2 Hz; "
+                "no continuous counter repaints");
+    auto logged = std::chrono::steady_clock::now();
+    bool previously_visible = false;
+    for (;;) {
+      {
+        std::unique_lock lock(stop_mutex_);
+        if (stop_cv_.wait_for(lock, std::chrono::milliseconds(500),
+                              [this] { return stopping_; })) return;
+      }
+      const bool visible = REXCVAR_GET(mcla_fps_overlay);
+      // One final repaint clears a disabled overlay. Keep at most one queued
+      // callback, so a blocked UI cannot accumulate timer work. No callback
+      // captures this: queued callbacks may outlive the dialog during shutdown.
+      if ((visible || previously_visible) && !callbacks_->pending.exchange(true)) {
+        const auto state = callbacks_;
+        if (!context.CallInUIThread([state] {
+          state->pending.store(false);
+          if (!state->active.load()) return;
+          auto* runtime = rex::Runtime::instance();
+          auto* graphics = runtime ? runtime->graphics_system() : nullptr;
+          auto* presenter = graphics ? graphics->presenter() : nullptr;
+          if (presenter) presenter->RequestUIPaintFromUIThread();
+        })) state->pending.store(false);
+      }
+      previously_visible = visible;
+      const auto now = std::chrono::steady_clock::now();
+      if (now - logged < std::chrono::seconds(5)) continue;
+      logged = now;
+      if (!REXCVAR_GET(mcla_fps_log)) continue;
+      auto* runtime = rex::Runtime::instance();
+      auto* graphics = runtime ? runtime->graphics_system() : nullptr;
+      auto* presenter = graphics ? graphics->presenter() : nullptr;
+      if (!presenter) continue;
+      auto times = presenter->GetRecentPresentationTimes();
+      const uint64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          now.time_since_epoch()).count();
+      const uint64_t cutoff = now_ns > 2'000'000'000 ? now_ns - 2'000'000'000 : 0;
+      times.erase(times.begin(), std::lower_bound(times.begin(), times.end(), cutoff));
+      double fps = 0, p50 = 0, p95 = 0;
+      if (times.size() >= 2 && times.back() > times.front()) {
+        fps = double(times.size() - 1) * 1e9 / double(times.back() - times.front());
+        std::vector<double> intervals;
+        for (size_t i = 1; i < times.size(); ++i) {
+          intervals.push_back(double(times[i] - times[i - 1]) / 1e6);
+        }
+        std::sort(intervals.begin(), intervals.end());
+        p50 = intervals[(intervals.size() - 1) / 2];
+        p95 = intervals[(intervals.size() * 95 + 99) / 100 - 1];
+      }
+      REXLOG_INFO("host presentation (recent 2s): {:.2f} FPS, p50 {:.2f} ms, p95 {:.2f} ms; "
+                  "{} samples, not display scanout", fps, p50, p95, times.size());
+      const auto game = mcla::GetGameUpdateStats();
+      REXLOG_INFO("game updates: {:.2f}/s, p95 {:.2f} ms; {} samples; not display scanout",
+                  game.fps, game.p95_ms, game.samples);
+    }
+  }
+  std::shared_ptr<CallbackState> callbacks_ = std::make_shared<CallbackState>();
+  std::mutex stop_mutex_;
+  std::condition_variable stop_cv_;
+  bool stopping_ = false;
+  std::thread worker_;
 };
 #endif
 
@@ -1296,6 +1360,12 @@ class VideoBorders final : public rex::ui::ImGuiDialog {
 
 }
 
+void MclaApp::StartFpsTelemetry() {
+#ifdef __ANDROID__
+  if (fps_counter_) static_cast<FpsCounter*>(fps_counter_.get())->Start(app_context());
+#endif
+}
+
 void MclaApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 #ifdef __ANDROID__
   fps_counter_ = std::make_unique<FpsCounter>(drawer);
@@ -1309,6 +1379,9 @@ void MclaApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
 }
 
 void MclaApp::OnShutdown() {
+#if defined(MCLA_ADRENO_DIAGNOSTIC_APK)
+  mcla::diagnostics::Stop();
+#endif
   fps_counter_.reset();
   video_borders_.reset();
 }

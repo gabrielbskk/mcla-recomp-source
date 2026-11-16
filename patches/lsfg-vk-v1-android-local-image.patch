@@ -1,0 +1,14 @@
+diff --git a/framegen/src/core/image.cpp b/framegen/src/core/image.cpp
+--- a/framegen/src/core/image.cpp
++++ b/framegen/src/core/image.cpp
+@@ -129,7 +129,9 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
+     };
+     const VkImageCreateInfo desc{
+         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+-        .pNext = &externalInfo,
++        // Android adaptation: fd=-1 requests a local benchmark image, not an
++        // external-memory image backed by an ordinary non-export allocation.
++        .pNext = fd >= 0 ? &externalInfo : nullptr,
+         .imageType = VK_IMAGE_TYPE_2D,
+         .format = format,
+         .extent = {

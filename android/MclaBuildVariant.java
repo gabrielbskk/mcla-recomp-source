@@ -11,6 +11,10 @@ final class MclaBuildVariant {
         return "redmagic-audio-test".equals(name(context));
     }
 
+    static boolean isAdrenoDiagnostic(Context context) {
+        return "adreno-diagnostic".equals(name(context));
+    }
+
     private static String name(Context context) {
         try {
             Bundle metadata = context.getPackageManager().getApplicationInfo(

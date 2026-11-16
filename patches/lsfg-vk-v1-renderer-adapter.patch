@@ -1,0 +1,247 @@
+diff --git a/framegen/include/core/commandbuffer.hpp b/framegen/include/core/commandbuffer.hpp
+index 35eeb57..51ed6cc 100644
+--- a/framegen/include/core/commandbuffer.hpp
++++ b/framegen/include/core/commandbuffer.hpp
+@@ -47,6 +47,9 @@ namespace LSFG::Core {
+         ///
+         CommandBuffer(const Core::Device& device, const CommandPool& pool);
+ 
++        // A recording-only view. Never frees, ends or submits the caller's buffer.
++        explicit CommandBuffer(VkCommandBuffer recordingBuffer);
++
+         ///
+         /// Begin recording commands in the command buffer.
+         ///
+@@ -105,6 +108,7 @@ namespace LSFG::Core {
+         CommandBuffer& operator=(CommandBuffer&&) noexcept = default;
+         ~CommandBuffer() = default;
+     private:
++        bool borrowed = false;
+         std::shared_ptr<CommandBufferState> state;
+         std::shared_ptr<VkCommandBuffer> commandBuffer;
+     };
+diff --git a/framegen/include/core/device.hpp b/framegen/include/core/device.hpp
+index d03a89c..927b53a 100644
+--- a/framegen/include/core/device.hpp
++++ b/framegen/include/core/device.hpp
+@@ -6,6 +6,7 @@
+ 
+ #include <cstdint>
+ #include <memory>
++#include <stdexcept>
+ 
+ namespace LSFG::Core {
+ 
+@@ -26,6 +27,15 @@ namespace LSFG::Core {
+         ///
+         Device(const Instance& instance, uint64_t deviceUUID);
+ 
++        // Renderer-owned device. The caller retains lifetime, enabled-feature
++        // validation and external queue synchronization responsibilities.
++        Device(VkDevice handle, VkPhysicalDevice physical, uint32_t family, VkQueue queue)
++            : device(std::make_shared<VkDevice>(handle)), physicalDevice(physical),
++              computeFamilyIdx(family), computeQueue(queue) {
++            if (!handle || !physical || !queue)
++                throw std::invalid_argument("Invalid borrowed Vulkan device/queue");
++        }
++
+         /// Get the Vulkan handle.
+         [[nodiscard]] auto handle() const { return *this->device; }
+         /// Get the physical device associated with this logical device.
+diff --git a/framegen/src/core/commandbuffer.cpp b/framegen/src/core/commandbuffer.cpp
+index 7deea63..b41940b 100644
+--- a/framegen/src/core/commandbuffer.cpp
++++ b/framegen/src/core/commandbuffer.cpp
+@@ -16,6 +16,12 @@
+ 
+ using namespace LSFG::Core;
+ 
++CommandBuffer::CommandBuffer(VkCommandBuffer recordingBuffer)
++    : borrowed(true), state(std::make_shared<CommandBufferState>(CommandBufferState::Recording)),
++      commandBuffer(std::make_shared<VkCommandBuffer>(recordingBuffer)) {
++    if (!recordingBuffer) throw std::invalid_argument("Null borrowed command buffer");
++}
++
+ CommandBuffer::CommandBuffer(const Core::Device& device, const CommandPool& pool) {
+     // create command buffer
+     const VkCommandBufferAllocateInfo desc{
+@@ -40,6 +46,7 @@ CommandBuffer::CommandBuffer(const Core::Device& device, const CommandPool& pool
+ }
+ 
+ void CommandBuffer::begin() {
++    if (borrowed) throw std::logic_error("Cannot begin a borrowed recording buffer");
+     if (*this->state != CommandBufferState::Empty)
+         throw std::logic_error("Command buffer is not in Empty state");
+ 
+@@ -62,6 +69,7 @@ void CommandBuffer::dispatch(uint32_t x, uint32_t y, uint32_t z) const {
+ }
+ 
+ void CommandBuffer::end() {
++    if (borrowed) throw std::logic_error("Cannot end a borrowed recording buffer");
+     if (*this->state != CommandBufferState::Recording)
+         throw std::logic_error("Command buffer is not in Recording state");
+ 
+@@ -77,6 +85,7 @@ void CommandBuffer::submit(VkQueue queue, std::optional<Fence> fence,
+         std::optional<std::vector<uint64_t>> waitSemaphoreValues,
+         const std::vector<Semaphore>& signalSemaphores,
+         std::optional<std::vector<uint64_t>> signalSemaphoreValues) {
++    if (borrowed) throw std::logic_error("Cannot submit a borrowed recording buffer");
+     if (*this->state != CommandBufferState::Full)
+         throw std::logic_error("Command buffer is not in Full state");
+ 
+diff --git a/framegen/src/core/device.cpp b/framegen/src/core/device.cpp
+index b4474da..575155b 100644
+--- a/framegen/src/core/device.cpp
++++ b/framegen/src/core/device.cpp
+@@ -85,13 +85,19 @@ Device::Device(const Instance& instance, uint64_t deviceUUID) {
+         .queueCount = 1,
+         .pQueuePriorities = &queuePriority
+     };
++    // The LSFG chain writes R8/R16 storage formats; support must be enabled,
++    // not merely exposed by the physical device.
++    const VkPhysicalDeviceFeatures coreFeatures{
++        .shaderStorageImageExtendedFormats = VK_TRUE
++    };
+     const VkDeviceCreateInfo deviceCreateInfo{
+         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+         .pNext = &features12,
+         .queueCreateInfoCount = 1,
+         .pQueueCreateInfos = &computeQueueDesc,
+         .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
+-        .ppEnabledExtensionNames = requiredExtensions.data()
++        .ppEnabledExtensionNames = requiredExtensions.data(),
++        .pEnabledFeatures = &coreFeatures
+     };
+     VkDevice deviceHandle{};
+     res = vkCreateDevice(*physicalDevice, &deviceCreateInfo, nullptr, &deviceHandle);
+diff --git a/framegen/src/core/image.cpp b/framegen/src/core/image.cpp
+index cfbf2e2..75638e4 100644
+--- a/framegen/src/core/image.cpp
++++ b/framegen/src/core/image.cpp
+@@ -129,7 +129,9 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
+     };
+     const VkImageCreateInfo desc{
+         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+-        .pNext = &externalInfo,
++        // Android adaptation: fd=-1 requests a local benchmark image, not an
++        // external-memory image backed by an ordinary non-export allocation.
++        .pNext = fd >= 0 ? &externalInfo : nullptr,
+         .imageType = VK_IMAGE_TYPE_2D,
+         .format = format,
+         .extent = {
+@@ -140,7 +142,9 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
+         .mipLevels = 1,
+         .arrayLayers = 1,
+         .samples = VK_SAMPLE_COUNT_1_BIT,
+-        .usage = usage,
++        // Research-only local images support staging upload/readback. Real FD
++        // imports retain their original usage contract.
++        .usage = usage | (fd < 0 ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0),
+         .sharingMode = VK_SHARING_MODE_EXCLUSIVE
+     };
+     VkImage imageHandle{};
+diff --git a/framegen/src/core/instance.cpp b/framegen/src/core/instance.cpp
+index 981e634..9843d55 100644
+--- a/framegen/src/core/instance.cpp
++++ b/framegen/src/core/instance.cpp
+@@ -10,12 +10,18 @@
+ 
+ using namespace LSFG::Core;
+ 
++// Optional isolated-test loader callback. No app/global driver state is changed.
++extern "C" VkResult mcla_research_initialize_vulkan() __attribute__((weak));
++
+ const std::vector<const char*> requiredExtensions = {
+ 
+ };
+ 
+ Instance::Instance() {
+-    volkInitialize();
++    const VkResult loaded = mcla_research_initialize_vulkan
++        ? mcla_research_initialize_vulkan() : volkInitialize();
++    if (loaded != VK_SUCCESS)
++        throw LSFG::vulkan_error(loaded, "Failed to initialize Vulkan loader");
+ 
+     // create Vulkan instance
+     const VkApplicationInfo appInfo{
+diff --git a/framegen/v3.1p_include/v3_1p/context.hpp b/framegen/v3.1p_include/v3_1p/context.hpp
+index ce965a0..358959c 100644
+--- a/framegen/v3.1p_include/v3_1p/context.hpp
++++ b/framegen/v3.1p_include/v3_1p/context.hpp
+@@ -51,6 +51,10 @@ namespace LSFG_3_1P {
+         void present(Vulkan& vk,
+             int inSem, const std::vector<int>& outSem);
+ 
++        // Record into a caller-owned buffer; no submits, CPU waits or fences.
++        // Caller serializes frames/resources on a compatible compute queue.
++        void record(Vulkan& vk, const Core::CommandBuffer& buffer);
++
+         // Trivially copyable, moveable and destructible
+         Context(const Context&) = default;
+         Context& operator=(const Context&) = default;
+@@ -58,6 +62,9 @@ namespace LSFG_3_1P {
+         Context& operator=(Context&&) = default;
+         ~Context() = default;
+     private:
++        // Isolated known-image research probe; not part of the shipping API.
++        friend struct ResearchAccess;
++        friend struct RendererAccess;
+         Core::Image inImg_0, inImg_1; // inImg_0 is next when fc % 2 == 0
+         uint64_t frameIdx{0};
+ 
+diff --git a/framegen/v3.1p_include/v3_1p/shaders/generate.hpp b/framegen/v3.1p_include/v3_1p/shaders/generate.hpp
+index 42f1e7b..b6e872a 100644
+--- a/framegen/v3.1p_include/v3_1p/shaders/generate.hpp
++++ b/framegen/v3.1p_include/v3_1p/shaders/generate.hpp
+@@ -15,6 +15,8 @@
+ #include <vector>
+ #include <cstdint>
+ 
++namespace LSFG_3_1P { struct ResearchAccess; struct RendererAccess; }
++
+ namespace LSFG_3_1P::Shaders {
+ 
+     using namespace LSFG;
+@@ -55,6 +57,8 @@ namespace LSFG_3_1P::Shaders {
+         Generate& operator=(Generate&&) noexcept = default;
+         ~Generate() = default;
+     private:
++        friend struct LSFG_3_1P::ResearchAccess;
++        friend struct LSFG_3_1P::RendererAccess;
+         Core::ShaderModule shaderModule;
+         Core::Pipeline pipeline;
+         std::array<Core::Sampler, 2> samplers;
+diff --git a/framegen/v3.1p_src/context.cpp b/framegen/v3.1p_src/context.cpp
+index e4d94c5..2e2ee2b 100644
+--- a/framegen/v3.1p_src/context.cpp
++++ b/framegen/v3.1p_src/context.cpp
+@@ -10,6 +10,7 @@
+ #include <algorithm>
+ #include <optional>
+ #include <cstdint>
++#include <stdexcept>
+ 
+ using namespace LSFG;
+ using namespace LSFG_3_1P;
+@@ -61,6 +62,21 @@ Context::Context(Vulkan& vk,
+         outN, format);
+ }
+ 
++void Context::record(Vulkan& vk, const Core::CommandBuffer& buffer) {
++    if (buffer.getState() != Core::CommandBufferState::Recording || vk.generationCount != 1)
++        throw std::invalid_argument("Record-only path requires recording buffer and 2x mode");
++    this->mipmaps.Dispatch(buffer, this->frameIdx);
++    for (size_t i = 0; i < 7; ++i)
++        this->alpha.at(6 - i).Dispatch(buffer, this->frameIdx);
++    this->beta.Dispatch(buffer, this->frameIdx);
++    for (size_t i = 0; i < 7; ++i) {
++        this->gamma.at(i).Dispatch(buffer, this->frameIdx, 0);
++        if (i >= 4) this->delta.at(i - 4).Dispatch(buffer, this->frameIdx, 0);
++    }
++    this->generate.Dispatch(buffer, this->frameIdx, 0);
++    ++this->frameIdx;
++}
++
+ void Context::present(Vulkan& vk,
+         int inSem, const std::vector<int>& outSem) {
+     auto& data = this->data.at(this->frameIdx % 8);

@@ -61,12 +61,6 @@ public final class MclaActivity extends SDLActivity {
         touchControls.setGamepadConnected(connected);
     }
     private final Handler logHandler = new Handler(Looper.getMainLooper());
-    private final Runnable exportLogs = new Runnable() {
-        @Override public void run() {
-            MclaLogExporter.exportAsync(MclaActivity.this);
-            logHandler.postDelayed(this, 60_000);
-        }
-    };
 
     @Override
     public void setRequestedOrientation(int orientation) {
@@ -77,26 +71,56 @@ public final class MclaActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle state) {
+        MclaAdrenoDiagnostics.start(this);
+        MclaAdrenoDiagnostics.event(this, "onCreate; android=" + Build.VERSION.SDK_INT +
+                "; device=" + Build.MANUFACTURER + " " + Build.MODEL);
         applyAudioEnvironment();
-        MclaKeyboardMouse.apply(this);
+        MclaAudioTuning.apply(this);
         applyRedMagicShaderEnvironment();
         applyLogEnvironment();
+        MclaPerformanceProfile.apply(this);
+        MclaWorldOptions.apply(this);
+        MclaFrameGeneration.apply(this);
+        MclaKeyboardMouse.apply(this);
+        MclaCheats.apply(this);
         applyDriverDebugEnvironment();
+        MclaAdrenoDiagnostics.event(this, "driver=" +
+                (new File(getFilesDir(), "gpu-drivers/selected.txt").isFile() ? "custom" : "system") +
+                "; TU_DEBUG=" + (Os.getenv("TU_DEBUG") == null ? "none" : Os.getenv("TU_DEBUG")));
         File source = new File(getApplicationInfo().nativeLibraryDir, "librexgpu-xenos.so");
         File target = new File(getFilesDir(), "librexgpu-xenos.so");
-        try (FileInputStream input = new FileInputStream(source);
-             FileOutputStream output = new FileOutputStream(target)) {
-            byte[] buffer = new byte[64 * 1024];
-            int count;
-            while ((count = input.read(buffer)) != -1) {
-                output.write(buffer, 0, count);
+        long stageStart = android.os.SystemClock.elapsedRealtime();
+        try {
+            String stamp = getPackageManager().getPackageInfo(getPackageName(), 0).lastUpdateTime
+                    + ":" + source.length();
+            android.content.SharedPreferences staged = getSharedPreferences("native_staging", MODE_PRIVATE);
+            boolean reusable = source.isFile() && target.isFile() && target.length() == source.length()
+                    && stamp.equals(staged.getString("xenos", ""));
+            if (!reusable) {
+                File pending = new File(getFilesDir(), "librexgpu-xenos.so.pending");
+                try (FileInputStream input = new FileInputStream(source);
+                     FileOutputStream output = new FileOutputStream(pending)) {
+                    byte[] buffer = new byte[64 * 1024];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                    output.getFD().sync();
+                }
+                if (pending.length() != source.length()) throw new java.io.IOException("Incomplete plugin copy");
+                Os.rename(pending.getAbsolutePath(), target.getAbsolutePath());
+                staged.edit().putString("xenos", stamp).apply();
             }
+            MclaAdrenoDiagnostics.event(this, "startup xenos=" + (reusable ? "reuse" : "copied")
+                    + "; elapsed_ms=" + (android.os.SystemClock.elapsedRealtime() - stageStart));
         } catch (Exception e) {
             Log.e(TAG, "Could not stage the Xenos Vulkan plugin", e);
+            // Never run a mismatched or partial plugin after an update failed.
+            throw new IllegalStateException("Cannot prepare matching Xenos plugin", e);
         }
         super.onCreate(state);
         if (mLayout != null) {
             touchControls = new MclaTouchControls(this);
+            MclaAdrenoDiagnostics.event(this, "touch HUD=fixed-base-sticks-live-pressure-vsync" +
+                    "; layout collision separation enabled; SDL surface unchanged");
             mLayout.addView(touchControls, new RelativeLayout.LayoutParams(
                     RelativeLayout.LayoutParams.MATCH_PARENT,
                     RelativeLayout.LayoutParams.MATCH_PARENT));
@@ -109,8 +133,13 @@ public final class MclaActivity extends SDLActivity {
         if (Build.VERSION.SDK_INT >= 24) {
             PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (power != null && power.isSustainedPerformanceModeSupported()) {
-                getWindow().setSustainedPerformanceMode(true);
-                Log.i(TAG, "Sustained performance mode enabled");
+                // Experimental builds default to the normal Android power policy.
+                // OFF does not disable thermal protection or force GPU clocks.
+                boolean sustained = getSharedPreferences("performance", MODE_PRIVATE)
+                        .getBoolean("sustained", false);
+                getWindow().setSustainedPerformanceMode(sustained);
+                Log.i(TAG, "Sustained performance mode requested=" + sustained);
+                MclaAdrenoDiagnostics.event(this, "sustained_performance=" + sustained);
             } else {
                 Log.i(TAG, "Sustained performance mode unavailable");
             }
@@ -218,8 +247,9 @@ public final class MclaActivity extends SDLActivity {
                 debug = null;
             } else if (debug == null) {
                 // Launcher setting; explicit driver.env takes precedence.
-                debug = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                        .getString("tu_debug", "syncdraw");
+                debug = getSharedPreferences(MclaBuildVariant.isAdrenoDiagnostic(this) ?
+                        "driver_debug_a730" : "driver_debug", MODE_PRIVATE)
+                        .getString("tu_debug", MclaBuildVariant.isAdrenoDiagnostic(this) ? "" : "syncdraw");
                 if (!debug.equals("syncdraw") && !debug.equals("noubwc") &&
                         !debug.equals("flushall") && !debug.equals("nolrz") &&
                         !debug.equals("sysmem")) {
@@ -256,16 +286,16 @@ public final class MclaActivity extends SDLActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        MclaAdrenoDiagnostics.event(this, "onResume");
         requestAudioFocus();
         updateGamepad();
         if (touchControls != null) touchControls.resumeControls();
-        logHandler.removeCallbacks(exportLogs);
-        logHandler.postDelayed(exportLogs, 30_000);
+        MclaLogExporter.start(this);
     }
 
     @Override
     protected void onPause() {
-        logHandler.removeCallbacks(exportLogs);
+        MclaAdrenoDiagnostics.event(this, "onPause");
         if (touchControls != null) touchControls.clearInput();
         abandonAudioFocus();
         super.onPause();
@@ -274,7 +304,8 @@ public final class MclaActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
-        logHandler.removeCallbacks(exportLogs);
+        MclaAdrenoDiagnostics.event(this, "onDestroy");
+        MclaAdrenoDiagnostics.stop();
         if (inputManager != null) inputManager.unregisterInputDeviceListener(gamepadListener);
         if (touchControls != null) touchControls.clearInput();
         MclaLogExporter.exportAsync(this);

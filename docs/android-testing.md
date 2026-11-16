@@ -4,10 +4,6 @@ This experimental build uses the extracted files from the user's own copy of
 *Midnight Club: Los Angeles Complete Edition* for Xbox 360 (Title ID
 `545407F8`). The APK contains the ARM64 program; game data remains outside it.
 
-Optional [keyboard/mouse driving bindings](android-keyboard-mouse.md) are
-available in the common launcher. They default OFF; basic operation was reported
-on Galaxy S23, with broader peripheral and focus/reconnect testing still needed.
-
 ## Installation without root
 
 1. Install the ARM64 APK produced by `scripts/build_android_apk.sh`.
@@ -98,7 +94,7 @@ does not change Vulkan behavior.
 
 ## FPS Counter (cleaner overlay)
 
-Since v0.1.41, a new FPS counter is integrated into the frame timing system (`mcla_frame_delta` hook). It provides:
+Local test builds include a second FPS counter integrated into the frame timing system (`mcla_frame_delta` hook). It provides:
 
 - **Per-frame timing** with a rolling 240-frame window (~4 seconds at 60 FPS)
 - **Menu vs gameplay separation** (detected via render height < 800px)
@@ -311,10 +307,3 @@ No build is performed by this documentation page. The source recipe is in
 [android-build.md](android-build.md), and CI builds the patched SDK and host
 stub without game data. The APK includes AdrenoTools and its hooks, but no
 third-party Turnip driver.
-# Current GPU scope
-
-Mali/Immortalis and PanVK are unsupported. The Mali diagnostic APK has been
-withdrawn; do not follow historical Mali build/import instructions. Current
-Android development targets Snapdragon/Adreno. See
-[the retirement note](android-mali-driver.md). This does not change save/data
-preservation requirements for existing installations.

@@ -59,6 +59,7 @@ class MclaApp : public rex::ReXApp {
   void ApplyPcDefaults();
   void FollowCursorSetting();
   void StartProfilerIfRequested();
+  void StartFpsTelemetry();
 
   // The game folder and the mcla.toml it came from, when mcla.toml named it (empty otherwise).
   std::filesystem::path configured_game_root_;

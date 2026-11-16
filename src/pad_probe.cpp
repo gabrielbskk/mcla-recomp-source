@@ -41,6 +41,7 @@
 // 30 updates a second the script thread runs in every update.
 
 #include "generated/default/mcla_init.h"
+#include "android_diagnostics.h"
 
 #include <algorithm>
 #include <array>
@@ -698,6 +699,9 @@ void mcla_pad_probe_update(PPCRegister& r31) {
     ScanRecordSources(now);  // the action records the scripts ask about
   }
   if (pressed & kStartBit) {
+#if defined(MCLA_ADRENO_DIAGNOSTIC_APK)
+    if (pad == 0) mcla::diagnostics::RecordStartPress();
+#endif
     g_last_start_us.store(now, std::memory_order_relaxed);
     if (probe) {
       g_window_until_us.store(now + kWindowUs, std::memory_order_relaxed);

@@ -15,6 +15,7 @@
 // counts. mcla_telemetry_log writes the values to the log twice a second.
 
 #include "generated/default/mcla_init.h"
+#include "android_diagnostics.h"
 
 #include <chrono>
 #include <cmath>
@@ -67,6 +68,9 @@ void mcla_vehicle_telemetry(PPCRegister& r30) {
   if (!Plausible(body) || !Plausible(tach) || !Plausible(drive)) return;
   const uint32_t gears = Read32(base, drive + 60);
   if (!Plausible(gears)) return;
+#if defined(MCLA_ADRENO_DIAGNOSTIC_APK)
+  mcla::diagnostics::RecordPlayerCar(car);
+#endif
 
   const float vx = ReadFloat(base, body + 272);
   const float vy = ReadFloat(base, body + 276);

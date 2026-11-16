@@ -9,6 +9,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.Switch;
 
 /** Edit the same normalized touch layout used over the SDL surface. */
 public final class MclaTouchEditorActivity extends Activity {
@@ -26,8 +27,14 @@ public final class MclaTouchEditorActivity extends Activity {
         tools.setBackgroundColor(0xE8000000);
         TextView instructions = new TextView(this);
         instructions.setGravity(Gravity.CENTER);
-        instructions.setText("Drag each Xbox control to move it. Size applies to all controls.");
+        instructions.setText("Drag controls to move. Pedals: slide up for more gas/brake, down for less; release = 0. Size applies to all controls.");
         tools.addView(instructions);
+
+        Switch pedals = new Switch(this);
+        pedals.setText("Analog driving pedals (RT gas / LT brake)");
+        pedals.setChecked(preview.hasPedals());
+        pedals.setOnCheckedChangeListener((button, enabled) -> preview.setPedals(enabled));
+        tools.addView(pedals);
 
         SeekBar size = new SeekBar(this);
         size.setMax(90);
@@ -52,6 +59,7 @@ public final class MclaTouchEditorActivity extends Activity {
         reset.setText("Reset layout");
         reset.setOnClickListener(v -> {
             preview.resetLayout();
+            pedals.setChecked(preview.hasPedals());
             size.setProgress(40);
         });
         actions.addView(reset);

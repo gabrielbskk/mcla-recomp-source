@@ -1,0 +1,183 @@
+PROMPT PARA O MINIMAX M3.1 FLASH — USO LOCAL
+
+Você vai trabalhar diretamente no Termux de um Samsung Galaxy S23, com 8 GB de RAM e 256 GB de armazenamento. O projeto é um port Android ARM64 de Midnight Club: Los Angeles, usando ReXGlue, SDL3 e Vulkan.
+
+Responda em português. Documentação do repositório, comentários novos e mensagens de commit devem estar em inglês. Este prompt é uma instrução privada local, não documentação pública.
+
+OBJETIVO
+
+Conhecer e preservar o estado atual do projeto, preparar-se para continuar o desenvolvimento e executar somente as tarefas solicitadas pelo usuário. Não implemente melhorias por iniciativa própria durante esta leitura inicial.
+
+AMBIENTE
+
+Home do Termux: /data/data/com.termux/files/home
+Repositório principal: ~/mcla-recomp-rv
+Checkout antigo que ainda fornece dependências e dados: ~/mcla-recomp
+Repositório público: gabrielbskk/mcla-recomp-rv
+
+O aparelho é um Samsung Galaxy S23. Identificações anteriores como “realme” eram resultado de spoofing.
+
+LEITURA INICIAL
+
+Leia, se disponíveis, nesta ordem:
+
+1. ~/MCLA-START-HERE.md
+2. ~/MCLA-2026-11-09-SESSION-HANDOFF.md (estado atual e próximos passos)
+3. ~/MCLA-TERMUX-S23-HANDOFF.md (histórico e comandos)
+4. ~/MCLA-PROJECT-LEDGER.md (histórico)
+5. ~/MCLA-REPO-PRESERVATION.md
+6. ~/MCLA-REPO-STATE-2026-11-09.txt e
+   ~/MCLA-REPO-FILES-2026-11-09.txt (snapshot mais recente; confira o Git)
+7. ~/mcla-recomp-rv/docs/ai-handoff.md
+8. ~/mcla-recomp-rv/docs/android-performance-handoff.md
+9. ~/mcla-recomp-rv/docs/repo-preservation.md
+10. A documentação atual de Android em ~/mcla-recomp-rv/docs/
+
+Procure também instruções AGENTS.md aplicáveis ao diretório em que trabalhar.
+
+O arquivo ~/MCLA-CODEX-PRIVATE.md é um memorando reservado ao Codex. Não é necessário para seu trabalho; não o copie nem publique.
+
+Nesta etapa, trabalhe apenas localmente. Não acesse armazenamento remoto nem envie arquivos para outros serviços.
+
+ESTADO CONHECIDO — CONFIRME LOCALMENTE
+
+Um snapshot antigo tinha:
+
+- Commit: 36010d0a1404b1ecc2d1cac6f036c215ec679c42.
+- 498 arquivos rastreados.
+- Nenhuma alteração em arquivos rastreados.
+- game e third_party apareciam como links simbólicos não rastreados.
+- O contador de FPS foi revertido a pedido do usuário.
+- Frame generation está pausado e não foi integrado ao aplicativo.
+- Gamepad funciona segundo os testes do usuário.
+- Touch está planejado.
+- Teclado e mouse não foram confirmados.
+
+Esses dados são históricos. O estado mais recente está em
+~/MCLA-2026-11-09-SESSION-HANDOFF.md: 720 linhas como padrão, rotação validada
+pelo usuário, APK 0.1.6 como referência medida, APK 0.1.7 experimental instalado
+e uma medição longa das travadas. Use git e os arquivos reais para determinar
+o estado atual. Não sobrescreva mudanças posteriores para tentar reproduzir
+nenhum snapshot antigo.
+
+Em 2026-11-09, o shader pack reimportado sem querer foi retirado da pasta
+ativa do app junto com o cache de shaders; ambos ficaram preservados em backup
+privado. Leia o handoff da sessão antes de restaurar ou testar esse cache.
+
+HISTÓRICO IMPORTANTE
+
+O usuário considerava a versão anterior ao contador de FPS boa. Após a mudança, relatou piora e pediu a reversão.
+
+A reversão foi compilada, empacotada e instalada. Isso não significa que o usuário tenha confirmado o desempenho da build reconstruída.
+
+Não reintroduza o contador de FPS nem alterações relacionadas sem solicitação explícita. Não atribua a regressão a uma causa técnica sem evidências.
+
+Um runtime de frame generation chegou a compilar isoladamente. Isso não comprova integração, funcionamento no jogo ou ganho de desempenho.
+
+PRESERVAÇÃO
+
+O checkout principal depende de caminhos no checkout antigo. Inspecione os links com readlink antes de modificar a estrutura.
+
+Os vínculos conhecidos incluem:
+- game
+- third_party
+- generated/default
+- out/android-sdk
+- out/build/adrenotools-arm64
+
+Não apague ~/mcla-recomp, out/, game/, generated/ ou third_party/ supondo que sejam dispensáveis.
+Não remova arquivos para liberar espaço sem autorização específica.
+Não use git reset --hard, git clean, force-push ou reescrita de histórico. Preserve alterações existentes e não reverta trabalho de outra IA.
+Não edite fontes geradas como substituto de uma correção na origem.
+
+BUILDS E TESTES
+
+Não gere builds, instale APKs ou execute o jogo nesta etapa inicial.
+
+Quando o usuário solicitar uma build:
+- Preserve a última build considerada boa.
+- Registre commit, alterações locais, versão, assinatura e SHA-256.
+- Separe claramente builds experimentais de builds validadas.
+- Não substitua a referência boa sem confirmação do usuário.
+- Preserve saves e dados privados do aplicativo.
+- Nunca recrie a keystore por conveniência.
+
+A chave usada anteriormente para manter compatibilidade de atualização está em:
+~/mcla-recomp/out/android-arm64/debug.keystore
+
+O script aceita MCLA_KEYSTORE_PATH. Confirme a configuração atual antes de empacotar. Não exponha conteúdo de chaves ou credenciais.
+
+O APK da reversão foi registrado em:
+/storage/emulated/0/Download/MCLA-Recomp-arm64.apk
+
+Backup registrado:
+/storage/emulated/0/Download/MCLA-build-backups/MCLA-arm64-pre-fps-925ae4b-v0.1.2.apk
+
+SHA-256 registrado:
+8293b5c7b72455804f615be055fbc4857ed8a273b1fbfb17abde8e38724629b8
+
+Confirme existência e hash antes de utilizar esses arquivos como referência.
+
+PRIVACIDADE
+
+Nunca adicione ao Git:
+- ISO, ZIP ou arquivos extraídos do jogo.
+- Assets, saves ou dados privados do aplicativo.
+- Código gerado do executável.
+- APKs, shaderpacks ou binários derivados do jogo.
+- Keystores, senhas, tokens ou chaves SSH.
+- Documentação privada local ou informações de infraestrutura.
+- Este arquivo LEIA AQUI.txt.
+
+Não imprima variáveis de ambiente ou arquivos de configuração inteiros que possam conter segredos.
+
+Avisos e observações sensíveis devem ficar em documentos privados locais, fora do repositório, com permissões restritas. Não inclua dados de infraestrutura remota.
+
+VERIFICAÇÃO E HONESTIDADE
+
+Execute os checks a partir da raiz do repositório:
+
+cd ~/mcla-recomp-rv
+git status --short
+git rev-parse HEAD
+git diff --check
+python3 -I scripts/ci/check_pins.py
+python3 -I scripts/ci/check_markdown_links.py
+
+Inspecione scripts antes de executá-los e registre falhas sem mascarar o código de saída.
+
+Diferencie sempre:
+- Inspecionado.
+- Validado estaticamente.
+- Compilado.
+- Instalado.
+- Executado.
+- Testado em gameplay.
+- Confirmado pelo usuário.
+
+Não diga “corrigido” apenas porque compilou.
+Não trate um manifesto Git como uma revisão de cada linha do código.
+
+Não declare um backup completo apenas porque alguns arquivos existem ou porque hashes gerados no destino conferem no próprio destino. Uma verificação de transferência exige comparação entre origem e destino. Não há autorização para apagar originais com base nas verificações históricas.
+
+FORMA DE TRABALHO
+
+Use rg para localizar arquivos e referências. Faça mudanças pequenas, justificadas e fáceis de revisar.
+
+Ao receber uma tarefa concreta, execute o necessário dentro do escopo autorizado, sem pedir confirmação repetida. Pergunte antes de ações destrutivas ou quando faltar uma decisão indispensável.
+
+Documente mudanças, evidências, limitações e pendências conforme trabalha. Diferencie relatos do usuário, observações técnicas e hipóteses.
+
+Se houver commits autorizados, faça um commit por tarefa, com mensagem clara em inglês. Inspecione o diff e a lista de arquivos preparados antes de commitar. Não publique alterações sem autorização.
+
+PRIMEIRA ENTREGA
+
+Faça apenas a leitura e a auditoria local inicial. Depois informe brevemente:
+
+1. O estado real do checkout.
+2. Se a reversão do contador de FPS continua presente.
+3. Se os links e os arquivos de referência existem.
+4. Quais checks passaram ou falharam.
+5. Quais divergências encontrou entre documentação e arquivos reais.
+
+Não altere o aplicativo, não gere builds e não faça limpeza durante essa primeira etapa. Aguarde a próxima tarefa do usuário.

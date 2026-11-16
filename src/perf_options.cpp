@@ -7,6 +7,8 @@
 // in a frame, and these are the game's own ways of asking for fewer.
 
 #include "generated/default/mcla_init.h"
+#include "cheat_launch_policy.h"
+#include "android_diagnostics.h"
 
 #include <atomic>
 #include <chrono>
@@ -100,6 +102,9 @@ REXCVAR_DEFINE_DOUBLE(mcla_traffic_distance, 400.0, "MCLA",
     .range(100.0, 600.0);
 REXCVAR_DEFINE_DOUBLE(mcla_pedestrians, 1.0, "MCLA", "Pedestrian density scale").range(0.0, 1.0);
 REXCVAR_DEFINE_DOUBLE(mcla_parked_cars, 1.0, "MCLA", "Parked car density scale").range(0.0, 1.0);
+REXCVAR_DEFINE_BOOL(mcla_empty_streets, false, "MCLA",
+                    "Experimental: disable automatic/triggered ambient traffic, pedestrians and parked cars; next start")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 // Off-screen render passes that are drawn only every few frames, the picture of the
 // last one kept in between (0 or 1: every frame, as shipped). After the scene itself
 // they are what a weak GPU pays most for (archive/fork-base/launcher/dev/gpu-weak-2026-10-27.md).
@@ -183,6 +188,10 @@ const DevSwitch kDevSwitches[] = {
     {"fastVehShadows", [] { return bool(REXCVAR_GET(mcla_fast_car_shadows)); }},
     {"noimpostors", [] { return !REXCVAR_GET(mcla_foliage_impostors); }},
     {"nofsblur", [] { return !REXCVAR_GET(mcla_fullscreen_blur); }},
+    // Retail ambient-manager switches, NOT the opponent AI or all-vehicle spawn.
+    {"noautomatictraffic", [] { return bool(REXCVAR_GET(mcla_empty_streets)); }},
+    {"notriggeredtraffic", [] { return bool(REXCVAR_GET(mcla_empty_streets)); }},
+    {"noparkedcars", [] { return bool(REXCVAR_GET(mcla_empty_streets)); }},
 };
 
 // The value every switch gets: a guest string "1", which satisfies both the
@@ -419,6 +428,7 @@ struct Zone {
 };
 std::mutex g_zones_mutex;
 std::vector<Zone> g_zones;
+std::atomic<uint64_t> g_ambient_layout_rejected{0}, g_ambient_enable_rejected{0};
 double g_applied_distance = 400.0, g_applied_pedestrians = 1.0, g_applied_parked = 1.0;
 
 void WriteZone(uint8_t* base, const Zone& zone) {
@@ -426,9 +436,9 @@ void WriteZone(uint8_t* base, const Zone& zone) {
   // The option is the shipped zone's 400 m scaled; zones keep their own ratio.
   WriteFloat(base, zone.address + kZoneTrafficUnspawn, float(zone.unspawn * (distance / 400.0)));
   WriteFloat(base, zone.address + kZonePedestrians,
-             float(zone.pedestrians * REXCVAR_GET(mcla_pedestrians)));
+             REXCVAR_GET(mcla_empty_streets) ? 0.0f : float(zone.pedestrians * REXCVAR_GET(mcla_pedestrians)));
   WriteFloat(base, zone.address + kZoneParkedCars,
-             float(zone.parked * REXCVAR_GET(mcla_parked_cars)));
+             REXCVAR_GET(mcla_empty_streets) ? 0.0f : float(zone.parked * REXCVAR_GET(mcla_parked_cars)));
 }
 
 void ApplyAmbientIfChanged(uint8_t* base) {
@@ -532,6 +542,63 @@ void MclaTickPerfOptions() {
   TickAbTest();
   ApplyShadowPhases(base);
   ApplyAmbientIfChanged(base);
+#if defined(MCLA_ADRENO_DIAGNOSTIC_APK)
+  static auto next_population_sample = std::chrono::steady_clock::time_point{};
+  const auto now = std::chrono::steady_clock::now();
+  if (now >= next_population_sample) {
+    next_population_sample = now + std::chrono::seconds(5);
+    // Native registry has three 52-byte groups. +20/+44 are active counts;
+    // +16/+40 are free counts (sub_826D6390). No list traversal, entity
+    // destruction or cross-thread guest calls from the diagnostic worker.
+    const auto plausible = [](uint32_t p) {
+      return p >= 0x40000000u && p < 0xBFF00000u && !(p & 3);
+    };
+    const uint32_t manager = Read32(base, 0x8286D8E4);
+    const uint32_t registry = plausible(manager) ? Read32(base, manager + 12) : 0;
+    uint32_t counts[3]{};
+    bool known = plausible(registry);
+    if (known) {
+      for (uint32_t i = 0; i < 3; ++i) {
+        const uint32_t a = Read32(base, registry + i * 52 + 20);
+        const uint32_t b = Read32(base, registry + i * 52 + 44);
+        if (a > 4096 || b > 4096) known = false;
+        counts[i] = a + b;
+      }
+    }
+    if (known) {
+      REXLOG_INFO("population: enabled={} registry_active=[{},{},{}] total={} "
+                  "layout_rejected={} reenable_rejected={} scope=ambient_registry_only",
+                  bool(REXCVAR_GET(mcla_empty_streets)), counts[0], counts[1], counts[2],
+                  counts[0] + counts[1] + counts[2], g_ambient_layout_rejected.load(),
+                  g_ambient_enable_rejected.load());
+    } else {
+      REXLOG_INFO("population: registry_active=unknown manager={:#x} registry={:#x} "
+                  "layout_rejected={} reenable_rejected={}", manager, registry,
+                  g_ambient_layout_rejected.load(), g_ambient_enable_rejected.load());
+    }
+  }
+#endif
+}
+
+bool mcla_ambient_layout_admission(PPCRegister& r3) {
+  if (!REXCVAR_GET(mcla_empty_streets)) return false;
+  g_ambient_layout_rejected.fetch_add(1, std::memory_order_relaxed);
+  r3.s64 = -1;  // Native failure result, before a request/pool slot exists.
+  return true;
+}
+
+void mcla_camera_script_request() {
+#if defined(MCLA_ADRENO_DIAGNOSTIC_APK)
+  mcla::diagnostics::RecordCameraScriptRequest();
+#endif
+}
+
+void mcla_ambient_enable_policy(PPCRegister& r3) {
+  if (REXCVAR_GET(mcla_empty_streets) && r3.u8 != 0) {
+    g_ambient_enable_rejected.fetch_add(1, std::memory_order_relaxed);
+    r3.u64 = 0;
+  }
+  // Run the original setter: it owns cleanup and async-worker synchronization.
 }
 
 // Before mcla_anti_aliasing, mcla_msaa = false turned anti-aliasing off: it
@@ -671,6 +738,18 @@ void MclaApplyMsaaAtSwap() {
 
 void mcla_dev_option_registered(PPCRegister& r3) {
   uint8_t* base = Base();
+  // These three adjacent retail bools are the targets of the native enable
+  // APIs below (initialized to 1 in the matching image). Set them before any
+  // scene loads, rather than relying solely on tuning densities or dev switches.
+  static bool ambient_initialized = false;
+  if (base && !ambient_initialized) {
+    ambient_initialized = true;
+    if (REXCVAR_GET(mcla_empty_streets)) {
+      base[0x8282A7C8] = base[0x8282A7C9] = base[0x8282A7CA] = 0;
+      REXLOG_INFO("population: startup native traffic/peds/parked enable flags=0; "
+                  "ambient layout admission disabled; not an active-object count");
+    }
+  }
   const uint32_t node = r3.u32;
   if (!base || !LooksLikePointer(node)) {
     return;
@@ -687,6 +766,25 @@ void mcla_dev_option_registered(PPCRegister& r3) {
       if (const uint32_t value = DevSwitchValue()) {
         Write32(base, node + 4, value);
         REXLOG_INFO("perf options: developer switch '{}' set", dev_switch.name);
+      }
+    }
+    return;
+  }
+  // Startup only, on the guest registrar's thread, after it cleared node+4.
+  // Reuse a guest-heap string, not writable-code scratch or arbitrary offsets.
+  // The retail consumers set their own cheat flags and retain their restriction
+  // checks. Runtime/menu code may subsequently clear those flags; do not fight it.
+  for (const auto& cheat : mcla::cheats::kLaunchOptions) {
+    if (std::strcmp(reinterpret_cast<const char*>(base + name), cheat.game_name) != 0) {
+      continue;
+    }
+    if (mcla::cheats::Enabled(std::getenv(cheat.environment))) {
+      if (const uint32_t value = DevSwitchValue()) {
+        Write32(base, node + 4, value);
+        REXLOG_WARN("cheats: startup option '{}' requested; native restrictions retained; "
+                    "gameplay effect not verified by this message", cheat.game_name);
+      } else {
+        REXLOG_ERROR("cheats: could not allocate guest value for '{}'", cheat.game_name);
       }
     }
     return;

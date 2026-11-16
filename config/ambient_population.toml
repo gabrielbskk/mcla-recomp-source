@@ -1,0 +1,31 @@
+# Retail ambient-only admission and enable APIs. Never hook player/racer factories.
+# sub_826E1418 already returns -1 when its layout request pool is exhausted;
+# reject before allocating/enqueuing a request, using that existing failure ABI.
+[[midasm_hook]]
+address = 0x826E1418
+name = "mcla_ambient_layout_admission"
+registers = ["r3"]
+return_on_true = true
+
+# AmbientMgr_SetTrafficEnable / SetPedsEnable / SetParkedCarsEnable.
+# Coerce the bool before the prologue; retain native cleanup/worker scheduling.
+[[midasm_hook]]
+address = 0x826D5D90
+name = "mcla_ambient_enable_policy"
+registers = ["r3"]
+
+[[midasm_hook]]
+address = 0x826D5E20
+name = "mcla_ambient_enable_policy"
+registers = ["r3"]
+
+[[midasm_hook]]
+address = 0x826D5EB0
+name = "mcla_ambient_enable_policy"
+registers = ["r3"]
+
+# Game_SetCamera script native, observational only. Not all chase camera switches
+# pass through this wrapper; do not label it as definitive camera activation.
+[[midasm_hook]]
+address = 0x822C9E18
+name = "mcla_camera_script_request"

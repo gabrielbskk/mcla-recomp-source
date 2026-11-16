@@ -1,0 +1,4 @@
+{ /* Keep the optional plugin's Vulkan/C++ symbols private. */
+  global: mcla_lsfg_create; mcla_lsfg_record; mcla_lsfg_destroy;
+  local: *;
+};

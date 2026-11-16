@@ -7,119 +7,187 @@ import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.SystemClock;
 import android.provider.MediaStore;
+import android.system.Os;
+import android.system.StructStat;
 import android.util.Log;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.Arrays;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
+import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 final class MclaLogExporter {
     private static final String TAG = "MCLA Logs";
-    private static final String RELATIVE_PATH = Environment.DIRECTORY_DOCUMENTS + "/MCLA/logs/";
-    private static final Object LOCK = new Object();
-
+    private static final String PATH = Environment.DIRECTORY_DOCUMENTS + "/MCLA/logs/";
+    private static final String SESSION = UUID.randomUUID().toString();
+    private static final int MAX_BYTES = 8 * 1024 * 1024;
+    private static final int CHUNK_BYTES = 64 * 1024;
+    private static ScheduledExecutorService worker;
+    // All export I/O and cursor updates are serialized by this worker.
     private MclaLogExporter() {}
 
-    static void exportAsync(Context context) {
+    static String sessionId() { return SESSION; }
+
+    static String timestamp() {
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US);
+        format.setTimeZone(TimeZone.getDefault());
+        return format.format(new Date());
+    }
+
+    static synchronized void start(Context context) {
+        if (worker != null || Build.VERSION.SDK_INT < 29) return;
         Context app = context.getApplicationContext();
-        new Thread(() -> export(app), "MCLA log export").start();
+        worker = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread thread = new Thread(r, "MCLA incremental log export");
+            thread.setPriority(Thread.MIN_PRIORITY);
+            thread.setDaemon(true);
+            return thread;
+        });
+        worker.scheduleWithFixedDelay(() -> safeExport(app), 5, 30, TimeUnit.SECONDS);
     }
 
-    private static void export(Context context) {
-        if (Build.VERSION.SDK_INT < 29) {
-            Log.w(TAG, "Automatic Documents export requires Android 10 or newer");
-            return;
-        }
-        synchronized (LOCK) {
-            File source = new File(context.getFilesDir(), "logs");
-            File[] logs = source.listFiles((dir, name) -> name.startsWith("mcla_") &&
-                    name.endsWith(".log"));
-            if (logs == null) return;
-            Arrays.sort(logs, (left, right) -> left.getName().compareTo(right.getName()));
-            SharedPreferences state = context.getSharedPreferences("exported-logs", Context.MODE_PRIVATE);
-            File current = new File(source, "mcla.log");
-            if (current.isFile()) {
-                // Export the bounded rotation and current log as ONE document,
-                // oldest first. Preserve historical exports from older builds.
-                File backup = new File(source, "mcla.1.log");
-                File[] parts = backup.isFile() ? new File[]{backup, current} :
-                        new File[]{current};
-                String stamp = "";
-                for (File part : parts) stamp += part.length() + ":" + part.lastModified() + ";";
-                if (!stamp.equals(state.getString("mcla-current.log.stamp", ""))) {
-                    try {
-                        exportOne(context.getContentResolver(), state, "mcla-current.log", parts);
-                        state.edit().putString("mcla-current.log.stamp", stamp).apply();
-                    } catch (Exception e) {
-                        Log.e(TAG, "Could not export current log", e);
-                    }
-                }
-                return;
-            }
-            for (File log : logs) {
-                if (!log.isFile()) continue;
-                String name = log.getName();
-                String stamp = log.length() + ":" + log.lastModified();
-                if (stamp.equals(state.getString(name + ".stamp", "")) &&
-                        "txt".equals(state.getString(name + ".format", ""))) continue;
-                try {
-                    exportOne(context.getContentResolver(), state, name, new File[]{log});
-                    state.edit().putString(name + ".stamp", stamp)
-                            .putString(name + ".format", "txt").apply();
-                } catch (Exception e) {
-                    Log.e(TAG, "Could not export " + name + " to " + RELATIVE_PATH, e);
-                }
-            }
+    static synchronized void exportAsync(Context context) {
+        start(context);
+        if (worker != null) {
+            Context app = context.getApplicationContext();
+            worker.execute(() -> safeExport(app));
         }
     }
 
-    private static void exportOne(ContentResolver resolver, SharedPreferences state,
-            String name, File[] parts) throws Exception {
-        String exportName = name.substring(0, name.length() - 4) + ".txt";
-        String saved = state.getString(name + ".uri", null);
-        Uri target = saved == null ? null : Uri.parse(saved);
-        boolean fresh = target == null;
-        if (fresh) {
-            ContentValues values = new ContentValues();
-            values.put(MediaStore.MediaColumns.DISPLAY_NAME, exportName);
-            values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
-            values.put(MediaStore.MediaColumns.RELATIVE_PATH, RELATIVE_PATH);
-            values.put(MediaStore.MediaColumns.IS_PENDING, 1);
-            target = resolver.insert(MediaStore.Files.getContentUri(
-                    MediaStore.VOLUME_EXTERNAL_PRIMARY), values);
-            if (target == null) throw new Exception("MediaStore refused " + RELATIVE_PATH + name);
-        } else {
-            ContentValues rename = new ContentValues();
-            rename.put(MediaStore.MediaColumns.DISPLAY_NAME, exportName);
-            if (resolver.update(target, rename, null, null) != 1) {
-                state.edit().remove(name + ".uri").apply();
-                throw new Exception("Could not rename exported log " + name);
-            }
-        }
-        try (OutputStream output = resolver.openOutputStream(target, "wt")) {
-            if (output == null) throw new Exception("Cannot open Documents output");
-            byte[] buffer = new byte[64 * 1024];
-            for (File part : parts) {
-                try (InputStream input = new FileInputStream(part)) {
-                    int count;
-                    while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
-                }
-            }
-            output.flush();
+    private static void safeExport(Context app) {
+        try {
+            export(app);
+            app.getSharedPreferences("auto-log-status", Context.MODE_PRIVATE).edit()
+                    .putString("status", "Last automatic check: " + timestamp()).apply();
         } catch (Exception e) {
-            if (fresh) resolver.delete(target, null, null);
-            else state.edit().remove(name + ".uri").apply();
-            throw e;
+            Log.w(TAG, "Automatic log export failed; retrying next cycle", e);
+            app.getSharedPreferences("auto-log-status", Context.MODE_PRIVATE).edit()
+                    .putString("status", "Automatic export needs attention (" +
+                            e.getClass().getSimpleName() + "). Retrying in the background.").apply();
         }
-        if (fresh) {
-            ContentValues published = new ContentValues();
-            published.put(MediaStore.MediaColumns.IS_PENDING, 0);
-            if (resolver.update(target, published, null, null) != 1)
-                throw new Exception("Could not publish exported log " + name);
-            state.edit().putString(name + ".uri", target.toString()).apply();
+    }
+
+    static String status(Context context) {
+        if (Build.VERSION.SDK_INT < 29) return "Automatic Documents export requires Android 10 or newer.";
+        return context.getSharedPreferences("auto-log-status", Context.MODE_PRIVATE)
+                .getString("status", "Automatic export is starting. No manual action required.");
+    }
+
+    private static String header(Context context) throws Exception {
+        return "\n=== MCLA SESSION/PROCESS " + SESSION + " observed=" + timestamp() +
+                " elapsed_ms=" + SystemClock.elapsedRealtime() + " ===\n" +
+                "version=" + context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName +
+                " android=" + Build.VERSION.SDK_INT + " device=" + Build.MANUFACTURER + " " + Build.MODEL +
+                "\ngraphics_profile=" + MclaGraphicsProfiles.selected(context) +
+                " keyboard_mouse_mode=" + MclaKeyboardMouse.mode(context) +
+                " empty_streets=" + context.getSharedPreferences(MclaWorldOptions.PREFS, Context.MODE_PRIVATE)
+                        .getBoolean(MclaWorldOptions.KEY, false) +
+                " sustained_performance=" + context.getSharedPreferences("performance", Context.MODE_PRIVATE)
+                        .getBoolean("sustained", false) +
+                "\nSources are grouped by read batch, NOT globally time-sorted. " +
+                "Source timestamps retain their original clock; imported backlog may predate this process. " +
+                "Bounded source rotation can leave gaps if collection falls behind. " +
+                "Abrupt process death may have no END marker.\n";
+    }
+
+    private static Uri target(Context context, SharedPreferences state) throws Exception {
+        ContentResolver resolver = context.getContentResolver();
+        String saved = state.getString("uri", null);
+        if (saved != null) {
+            Uri uri = Uri.parse(saved);
+            try (android.database.Cursor cursor = resolver.query(uri,
+                    new String[]{MediaStore.MediaColumns._ID}, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) return uri;
+            } catch (SecurityException e) {
+                Log.w(TAG, "Export document unavailable; creating a replacement", e);
+            }
         }
-        Log.i(TAG, "Exported " + name + " to " + RELATIVE_PATH);
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.MediaColumns.DISPLAY_NAME, "MCLA-diagnostic.txt");
+        values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+        values.put(MediaStore.MediaColumns.RELATIVE_PATH, PATH);
+        // Publish immediately: a process killed mid-export must not leave a hidden document.
+        Uri uri = resolver.insert(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values);
+        if (uri == null) throw new java.io.IOException("MediaStore refused diagnostic document");
+        state.edit().clear().putString("uri", uri.toString()).commit();
+        return uri;
+    }
+
+    private static void export(Context context) throws Exception {
+        SharedPreferences state = context.getSharedPreferences("unified-log-v1", Context.MODE_PRIVATE);
+        ContentResolver resolver = context.getContentResolver();
+        Uri uri = target(context, state);
+        SharedPreferences.Editor progress = state.edit();
+        ByteArrayOutputStream batch = new ByteArrayOutputStream();
+        if (!SESSION.equals(state.getString("session", ""))) {
+            batch.write(header(context).getBytes(StandardCharsets.UTF_8));
+        }
+        File folder = new File(context.getFilesDir(), "logs");
+        java.util.Set<String> activeKeys = new java.util.HashSet<>();
+        // Oldest first within each source. Inode identity follows rename-based rotation.
+        for (String name : new String[]{"mcla.1.log", "mcla.log", "mcla_a730.1.log", "mcla_a730.log"}) {
+            File source = new File(folder, name);
+            if (!source.isFile()) continue;
+            StructStat stat = Os.stat(source.getPath());
+            String key = "source." + stat.st_dev + "." + stat.st_ino;
+            activeKeys.add(key);
+            activeKeys.add(key + ".tail");
+            MclaLogChunk chunk = MclaLogChunk.read(source, state.getLong(key, 0),
+                    state.getString(key + ".tail", ""), CHUNK_BYTES);
+            if (chunk.bytes.length == 0) continue;
+            String marker = "\n--- source=" + name + " export_process=" + SESSION + " observed=" + timestamp() +
+                    " elapsed_ms=" + SystemClock.elapsedRealtime() + " end_offset=" + chunk.nextOffset +
+                    " reset=" + chunk.reset + " partial_line=" + chunk.partialLine + " ---\n";
+            batch.write(marker.getBytes(StandardCharsets.UTF_8));
+            batch.write(chunk.bytes);
+            progress.putLong(key, chunk.nextOffset).putString(key + ".tail", chunk.tail);
+        }
+        if (batch.size() == 0) return;
+        if (batch.size() > MAX_BYTES / 2 - 16384)
+            throw new java.io.IOException("Export batch exceeds safe retention budget");
+        for (String key : state.getAll().keySet()) {
+            if (key.startsWith("source.") && !activeKeys.contains(key)) progress.remove(key);
+        }
+        long size;
+        try (android.os.ParcelFileDescriptor fd = resolver.openFileDescriptor(uri, "r")) {
+            if (fd == null || (size = fd.getStatSize()) < 0)
+                throw new java.io.IOException("Cannot establish export size");
+        }
+        byte[] retained = null;
+        if (size > MAX_BYTES - batch.size()) {
+            // Keep the newest half, beginning at a complete line, without an unbounded archive.
+            try (InputStream input = resolver.openInputStream(uri)) {
+                if (input == null) throw new java.io.IOException("Cannot read export for compaction");
+                retained = MclaLogChunk.recentTail(input, size, MAX_BYTES / 2);
+            }
+        }
+        byte[] trimNotice = ("=== HISTORY TRIMMED at " + timestamp() +
+                "; limit=8MiB; recent tail retained ===\n").getBytes(StandardCharsets.UTF_8);
+        byte[] restartHeader = retained == null ? new byte[0] : header(context).getBytes(StandardCharsets.UTF_8);
+        if (retained != null && (long) retained.length + trimNotice.length + restartHeader.length +
+                batch.size() > MAX_BYTES) throw new java.io.IOException("Compaction exceeds 8 MiB");
+        try (OutputStream output = resolver.openOutputStream(uri, retained == null ? "wa" : "wt")) {
+            if (output == null) throw new java.io.IOException("Cannot open export output");
+            if (retained != null) {
+                output.write(trimNotice);
+                output.write(retained);
+                output.write(restartHeader);
+            }
+            batch.writeTo(output);
+            output.flush();
+        }
+        // A kill between write and commit may replay a batch; offsets make that identifiable.
+        if (!progress.putString("session", SESSION).commit())
+            Log.w(TAG, "Cursor commit failed; next cycle may repeat a batch");
     }
 }

@@ -1,44 +1,50 @@
 # Android ARM64 status
 
-> **2026-11-14 scope update:** Mali/Immortalis diagnostics and PanVK distribution
-> have been discontinued. Current development targets Snapdragon/Adreno.
-> Historical Mali investigation notes below are not support instructions.
-> See [the retirement rationale](android-mali-driver.md).
-
-Last reviewed: 2026-11-12. This is the canonical handoff for the Android port.
+Last reviewed: 2026-11-14 (including local candidates). This is the canonical handoff for the Android port.
 The important historical decisions are summarized in
 [android-history.md](android-history.md); the detailed build recipe is in
 [android-build.md](android-build.md).
 
 ## Scope
 
+### Local candidate update — 2026-11-14
+
+Installed local candidate: **0.1.59-android-event-wake-test** (code 59), normal
+game, S23 visual preset retired. The user confirmed v58 NPC removal and other
+functional corrections; do not revert them. An isolated SDL Android sentinel
+self-wake fix substantially reduced sampled SDL CPU; frame-window gains and
+remaining loading spikes are documented in
+[android-v59-performance-regression.md](android-v59-performance-regression.md).
+No strict all-stutters-fixed claim: ~612 ms transition spikes still exist.
+Only SDL differs from v58; DEX and other libraries are identical.
+Fixed-base joystick rewrite, restored live pedal
+feedback, English launcher, native ambient admission policy and transition/frame
+instrumentation are documented in [android-v58-technical-review.md](android-v58-technical-review.md).
+The v57 baseline and startup I/O work remain documented in
+[android-normal-touch-startup-candidate.md](android-normal-touch-startup-candidate.md).
+The user has validated v58's visible NPC removal and other functional fixes.
+Instrumented per-class object auditing and strict camera/stutter before/after
+acceptance remain incomplete; v59 also needs physical peripheral regression tests
+after the event-wait change. No APK/release uploaded. Older release notes below are historical
+and do not describe the installed local candidate. Mouse/keyboard were confirmed
+working on S23 before these changes; their implementation is unchanged here.
+
 The port recompiles the Xbox 360 PowerPC code to ARM64 C++ and runs it through
 the ReXGlue runtime, SDL3 and Vulkan. It is native ARM64 Android integration,
 not an x86 emulator or a Linux compatibility layer.
 
-## Current release (0.1.25)
+## Current release (0.1.24)
 
-- [Android ARM64 v0.1.25](android-release.md) is debug-signed with the existing
+- [Android ARM64 v0.1.24](android-release.md) is debug-signed with the existing
   certificate and was installed with `pm install -r` on the Galaxy S23
-  (Adreno 740, 8 GB RAM); versionCode 25 is what the device reports. The
-  maintainer confirmed audio now plays without screen recording. Touch and the
-  redesigned launcher still have no gameplay validation. The public release
-  carries the APK as a release asset, not a tracked source file.
-- 0.1.25 opens the normal AAudio mixer path instead of the low-latency stream
-  by default (the fast stream was silent on the affected device until another
-  stream opened the mixer), keeps `mcla_audio_low_latency` as the opt-in for
-  the old behaviour, and requests audio focus from the game activity. Latency
-  was not measured.
-- A later local build (versionCode 26) adds an audio mode button to the
-  launcher's Extras card, between the two paths. The maintainer reports better
-  performance on the low-latency path and working audio only on the normal
-  mixer path; a controlled before/after frame-rate measurement is still
-  missing, so no default has been chosen from data. The touch overlay was
-  confirmed working in gameplay on the same phone.
-- 0.1.24 added the card-based launcher (Game files / Graphics / Extras /
-  Launch), the generic **Select Vulkan driver (.zip)** label and the
-  experimental Xbox-style touch overlay with a HUD editor. Touch input is not
-  yet validated in gameplay; a gamepad remains the only validated method.
+  (Adreno 740, 8 GB RAM); versionCode 24 is what the device reports. It adds
+  the card-based launcher (Game files / Graphics / Extras / Launch), the generic
+  **Select Vulkan driver (.zip)** label and the experimental Xbox-style touch
+  overlay with a HUD editor. The public release carries the APK as a release
+  asset, not a tracked source file.
+- The touch overlay was later confirmed working in gameplay on the same phone.
+  A gamepad remains the only validated control method overall; the HUD editor
+  and floating sticks are described in [android-testing.md](android-testing.md).
 - The previous validated gameplay release remains
   [Android ARM64 v0.1.15](android-release.md), played on the same phone. The
   public release carries the tested APK and artwork as release assets, not

@@ -25,6 +25,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Switch;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -59,10 +60,11 @@ public final class MclaLauncherActivity extends Activity {
     private Button shaderButton;
     private Button shaderImportButton;
     private Button audioButton;
-    private Button adaptiveQueueButton;
+    private final Switch[] cheatSwitches = new Switch[MclaCheats.KEYS.length];
     private Spinner turnipDebugSpinner;
     private TextView driverStatus;
     private TextView shaderStatus;
+    private TextView logStatus;
     private ProgressBar progress;
     private boolean playPending;
 
@@ -88,14 +90,36 @@ public final class MclaLauncherActivity extends Activity {
     }
 
     private LinearLayout card(LinearLayout parent, String title, String subtitle) {
+        return card(parent, title, subtitle, false);
+    }
+
+    private LinearLayout card(LinearLayout parent, String title, String subtitle, boolean expanded) {
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setPadding(dp(12), dp(8), dp(12), dp(12));
+        shell.setBackground(surface(0xFF172532, 0xFF2C4352));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.bottomMargin = dp(12);
+        parent.addView(shell, params);
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(18), dp(17), dp(18), dp(18));
-        card.setBackground(surface(0xFF172532, 0xFF2C4352));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.bottomMargin = dp(14);
-        parent.addView(card, params);
-        card.addView(label(title, 19, Color.WHITE, true));
+        card.setPadding(dp(6), 0, dp(6), dp(6));
+        Button header = new Button(this);
+        header.setAllCaps(false);
+        header.setTextColor(Color.WHITE);
+        header.setTextSize(18);
+        header.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        header.setMinHeight(dp(52));
+        header.setBackgroundColor(Color.TRANSPARENT);
+        header.setText((expanded ? "▾  " : "▸  ") + title);
+        header.setOnClickListener(view -> {
+            boolean open = card.getVisibility() != View.VISIBLE;
+            card.setVisibility(open ? View.VISIBLE : View.GONE);
+            header.setText((open ? "▾  " : "▸  ") + title);
+        });
+        shell.addView(header, new LinearLayout.LayoutParams(-1, -2));
+        shell.addView(card, new LinearLayout.LayoutParams(-1, -2));
+        card.setVisibility(expanded ? View.VISIBLE : View.GONE);
         TextView caption = label(subtitle, 13, 0xFFA8B9C4, false);
         LinearLayout.LayoutParams captionParams = new LinearLayout.LayoutParams(-1, -2);
         captionParams.topMargin = dp(4);
@@ -120,7 +144,6 @@ public final class MclaLauncherActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        MclaLogExporter.exportAsync(this);
         getWindow().setNavigationBarColor(0xFF0B161F);
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -129,17 +152,24 @@ public final class MclaLauncherActivity extends Activity {
 
         TextView eyebrow = label("MCLA  /  ANDROID", 12, 0xFF70DFCA, true);
         layout.addView(eyebrow);
-        TextView heading = label("Ready to race?", 32, Color.WHITE, true);
+        TextView heading = label("Midnight Club: Los Angeles", 27, Color.WHITE, true);
         LinearLayout.LayoutParams headingParams = new LinearLayout.LayoutParams(-1, -2);
         headingParams.topMargin = dp(6);
         layout.addView(heading, headingParams);
-        TextView intro = label("Prepare your game, choose a graphics driver, and set up your controls.",
+        TextView intro = label("Normal edition · settings grouped by category. Tap a section to expand.",
                 14, 0xFFA8B9C4, false);
         LinearLayout.LayoutParams introParams = new LinearLayout.LayoutParams(-1, -2);
         introParams.bottomMargin = dp(20);
         layout.addView(intro, introParams);
 
-        LinearLayout gameCard = card(layout, "01  Game files", "Import the 13 extracted files from your own copy.");
+        playButton = new Button(this);
+        playButton.setText("Play");
+        playButton.setEnabled(hasGameFiles());
+        playButton.setOnClickListener(view -> startGame());
+        addAction(card(layout, "Play", "Touch, gamepad and keyboard/mouse · existing settings preserved", true),
+                playButton, true);
+
+        LinearLayout gameCard = card(layout, "Game files", "Import the 13 extracted files from your own copy.", !hasGameFiles());
 
         status = new TextView(this);
         status.setText(hasGameFiles() ? "Game files ready." :
@@ -164,7 +194,75 @@ public final class MclaLauncherActivity extends Activity {
         });
         addAction(gameCard, pickButton, false);
 
-        LinearLayout graphicsCard = card(layout, "02  Graphics", "Select a Vulkan driver for this device.");
+        LinearLayout graphicsCard = card(layout, "Graphics and driver", "Resolution and compatibility · no S23 preset");
+        MclaGpuAdvisor.addTo(this, graphicsCard);
+
+        graphicsCard.addView(label("Render resolution (next Play)", 13, 0xFFA8B9C4, false));
+        Spinner resolution = new Spinner(this);
+        resolution.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"Existing game settings", "720p / screen aspect (wider scene)",
+                        "720p / 16:9 (lighter; side bars)"}));
+        String selectedResolution = MclaGraphicsProfiles.selected(this);
+        resolution.setSelection(MclaGraphicsProfiles.HD_16_9.equals(selectedResolution) ? 2 :
+                MclaGraphicsProfiles.HD_SCREEN.equals(selectedResolution) ? 1 : 0);
+        resolution.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent,
+                    View view, int position, long id) {
+                getSharedPreferences(MclaGraphicsProfiles.PREFS, MODE_PRIVATE).edit()
+                        .putString(MclaGraphicsProfiles.KEY, position == 2 ?
+                                MclaGraphicsProfiles.HD_16_9 : position == 1 ?
+                                MclaGraphicsProfiles.HD_SCREEN : MclaGraphicsProfiles.CONFIGURED).apply();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        });
+        graphicsCard.addView(resolution);
+        graphicsCard.addView(label("720p requests 1280x720 instead of ultrawide. " +
+                "It does not change driver, shaders or graphics detail. Select Existing game " +
+                "settings to restore your saved configuration. Lower heights remain unvalidated.",
+                12, 0xFFA8B9C4, false));
+
+        LinearLayout worldCard = card(layout, "World and performance", "Independent options · restart the game to apply");
+        Switch emptyStreets = new Switch(this);
+        emptyStreets.setText("Remove pedestrians and ambient traffic (experimental)");
+        emptyStreets.setTextColor(Color.WHITE);
+        emptyStreets.setChecked(getSharedPreferences(MclaWorldOptions.PREFS, MODE_PRIVATE)
+                .getBoolean(MclaWorldOptions.KEY, false));
+        emptyStreets.setOnCheckedChangeListener((button, checked) ->
+                getSharedPreferences(MclaWorldOptions.PREFS, MODE_PRIVATE).edit()
+                        .putBoolean(MclaWorldOptions.KEY, checked).apply());
+        worldCard.addView(emptyStreets);
+        worldCard.addView(label("Disables ambient traffic, parked cars and pedestrians. " +
+                "Does not change opponent AI. Race and mission validation is still required; " +
+                "no guaranteed FPS gain. Turn off and restart to restore.",
+                12, 0xFFFFC078, false));
+        Switch framegen = new Switch(this);
+        framegen.setText("LSFG 2x frame generation (experimental; restart game)");
+        framegen.setTextColor(Color.WHITE);
+        framegen.setChecked(getSharedPreferences(MclaFrameGeneration.PREFS, MODE_PRIVATE)
+                .getBoolean(MclaFrameGeneration.KEY, false));
+        framegen.setOnCheckedChangeListener((button, checked) ->
+                getSharedPreferences(MclaFrameGeneration.PREFS, MODE_PRIVATE).edit()
+                        .putBoolean(MclaFrameGeneration.KEY, checked).apply());
+        worldCard.addView(framegen);
+        worldCard.addView(label("Off by default. Requires your own private Lossless.dll. " +
+                "SDR only; needs a compatible Vulkan driver and the game's separated scene. " +
+                "Three initial history frames are not generated. Adds GPU work and latency; " +
+                "does not fix CPU/streaming stalls. If unavailable, real frames continue.",
+                12, 0xFFFFC078, false));
+
+        Switch sustained = new Switch(this);
+        sustained.setText("Sustained performance mode (next Play)");
+        sustained.setTextColor(Color.WHITE);
+        sustained.setChecked(getSharedPreferences("performance", MODE_PRIVATE)
+                .getBoolean("sustained", false));
+        sustained.setOnCheckedChangeListener((button, checked) ->
+                getSharedPreferences("performance", MODE_PRIVATE).edit()
+                        .putBoolean("sustained", checked).apply());
+        worldCard.addView(sustained);
+        worldCard.addView(label("OFF uses Android's normal power policy. ON may limit clocks " +
+                "to sustain performance. Neither option disables thermal protection. Experimental.",
+                12, 0xFFA8B9C4, false));
 
         driverStatus = new TextView(this);
         driverStatus.setTextColor(0xFF70DFCA);
@@ -203,8 +301,9 @@ public final class MclaLauncherActivity extends Activity {
             turnipDebugSpinner = new Spinner(this);
             turnipDebugSpinner.setAdapter(new ArrayAdapter<>(this,
                     android.R.layout.simple_spinner_dropdown_item, options));
-            String current = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                    .getString("tu_debug", "syncdraw");
+            String current = getSharedPreferences(MclaBuildVariant.isAdrenoDiagnostic(this) ?
+                    "driver_debug_a730" : "driver_debug", MODE_PRIVATE)
+                    .getString("tu_debug", MclaBuildVariant.isAdrenoDiagnostic(this) ? "" : "syncdraw");
             int selected = 0;
             for (int i = 2; i < options.length; i++) {
                 if (options[i].equals(current)) selected = i;
@@ -217,7 +316,8 @@ public final class MclaLauncherActivity extends Activity {
                         View view, int position, long id) {
                     String value = position == 0 ? "syncdraw" :
                             position == 1 ? "" : options[position];
-                    getSharedPreferences("driver_debug", MODE_PRIVATE).edit()
+                    getSharedPreferences(MclaBuildVariant.isAdrenoDiagnostic(MclaLauncherActivity.this) ?
+                            "driver_debug_a730" : "driver_debug", MODE_PRIVATE).edit()
                             .putString("tu_debug", value).apply();
                     updateDriverStatus();
                 }
@@ -229,14 +329,15 @@ public final class MclaLauncherActivity extends Activity {
             updateDriverStatus();
         }
 
-        LinearLayout extrasCard = card(layout, "03  Extras", "Optional graphics assets and touch layout.");
+        LinearLayout extrasCard = card(layout, "Shaders", "Optional shader pack · disabled by default");
+        LinearLayout controlsCard = card(layout, "Controls", "Touch, gamepad and keyboard/mouse");
 
         shaderStatus = new TextView(this);
         shaderStatus.setTextColor(0xFFA8B9C4);
         extrasCard.addView(shaderStatus);
         updateShaderPackStatus();
 
-        extrasCard.addView(label("Keyboard / mouse (experimental; next Play)",
+        controlsCard.addView(label("Keyboard / mouse (experimental; next Play)",
                 13, 0xFFA8B9C4, false));
         Spinner keyboardMouse = new Spinner(this);
         keyboardMouse.setAdapter(new ArrayAdapter<>(this,
@@ -251,8 +352,8 @@ public final class MclaLauncherActivity extends Activity {
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
-        extrasCard.addView(keyboardMouse);
-        extrasCard.addView(label("W/S gas/brake, A/D steering; arrows menus; Space=A, " +
+        controlsCard.addView(keyboardMouse);
+        controlsCard.addView(label("W/S gas/brake, A/D steering; arrows menus; Space=A, " +
                 "Backspace/Esc=B, R=X, F=Y, Q/E=LB/RB, Enter=Start, Tab=Back, " +
                 "I/J/K/L camera. Mouse mode: move to look, left/right click=A/B. " +
                 "Android Home releases capture. Touch HUD hides when an enabled external device " +
@@ -260,6 +361,25 @@ public final class MclaLauncherActivity extends Activity {
                 12, 0xFFA8B9C4, false));
 
         shaderImportButton = new Button(this);
+        LinearLayout cheatsCard = card(layout, "Experimental cheats", "Next launch only · off by default");
+        cheatsCard.addView(label("May restrict saving, rewards or career progress. Use a separate " +
+                "backed-up save. These requests do not unlock collectibles, cars or money. " +
+                "Selections reset after Play; restart to remove the launch request. " +
+                "The game may clear cheats in some modes. Gameplay effects are not yet validated.",
+                12, 0xFFFFC078, false));
+        for (int i = 0; i < MclaCheats.KEYS.length; i++) {
+            final String cheatKey = MclaCheats.KEYS[i];
+            Switch cheat = new Switch(this);
+            cheatSwitches[i] = cheat;
+            cheat.setText(MclaCheats.LABELS[i]);
+            cheat.setTextColor(Color.WHITE);
+            cheat.setChecked(getSharedPreferences(MclaCheats.PREFS, MODE_PRIVATE)
+                    .getBoolean(cheatKey, false));
+            cheat.setOnCheckedChangeListener((button, checked) ->
+                    getSharedPreferences(MclaCheats.PREFS, MODE_PRIVATE).edit()
+                            .putBoolean(cheatKey, checked).apply());
+            cheatsCard.addView(cheat);
+        }
         shaderImportButton.setText("Select shader pack (.shaderpack)");
         shaderImportButton.setOnClickListener(view -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -286,7 +406,12 @@ public final class MclaLauncherActivity extends Activity {
         touchEditor.setText("Customize touch controls");
         touchEditor.setOnClickListener(view ->
                 startActivity(new Intent(this, MclaTouchEditorActivity.class)));
-        addAction(extrasCard, touchEditor, false);
+        addAction(controlsCard, touchEditor, false);
+        controlsCard.addView(label("Fixed-base sticks with radial dead zone and circular travel. " +
+                "Stick position and pedal pressure always update. Saved control positions are preserved.",
+                12, 0xFFA8B9C4, false));
+
+        LinearLayout audioCard = card(layout, "Audio", "Compatibility and independent buffer tests");
 
         audioButton = new Button(this);
         audioButton.setOnClickListener(view -> {
@@ -296,28 +421,57 @@ public final class MclaLauncherActivity extends Activity {
                     .putBoolean("low_latency", lowLatency).apply();
             updateAudioStatus();
         });
-        addAction(extrasCard, audioButton, false);
+        addAction(audioCard, audioButton, false);
         updateAudioStatus();
 
-        if (MclaBuildVariant.isRedMagicAudioTest(this)) {
-            adaptiveQueueButton = new Button(this);
-            adaptiveQueueButton.setOnClickListener(view -> {
-                boolean enabled = !adaptiveQueue();
-                getSharedPreferences("redmagic_diagnostics", MODE_PRIVATE).edit()
-                        .putBoolean("adaptive_queue", enabled).apply();
-                updateAdaptiveQueueStatus();
-            });
-            addAction(extrasCard, adaptiveQueueButton, false);
-            updateAdaptiveQueueStatus();
-        }
+        audioCard.addView(label("Audio anti-cut experiment (next Play)", 13, 0xFFA8B9C4, false));
+        Spinner audioQueue = new Spinner(this);
+        audioQueue.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[]{"Saved/default audio queue", "Anti-cut test: 16 blocks (~85 ms)",
+                        "Adaptive test: 8 to 24 blocks (~43 to 128 ms)"}));
+        audioQueue.setSelection(MclaAudioTuning.profile(this));
+        audioQueue.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent,
+                    View view, int position, long id) {
+                getSharedPreferences(MclaAudioTuning.PREFS, MODE_PRIVATE).edit()
+                        .putInt(MclaAudioTuning.KEY, MclaAudioTuning.normalize(position)).apply();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        });
+        audioCard.addView(audioQueue);
+        Switch stereo = new Switch(this);
+        stereo.setText("Force stereo output (next Play; separate test)");
+        stereo.setTextColor(Color.WHITE);
+        stereo.setChecked(getSharedPreferences(MclaAudioTuning.PREFS, MODE_PRIVATE)
+                .getBoolean("force_stereo", MclaBuildVariant.isRedMagicAudioTest(this)));
+        stereo.setOnCheckedChangeListener((button, checked) ->
+                getSharedPreferences(MclaAudioTuning.PREFS, MODE_PRIVATE).edit()
+                        .putBoolean("force_stereo", checked).apply());
+        audioCard.addView(stereo);
+        audioCard.addView(label("RedMagic candidate: try 16 blocks first, keeping your mixer and " +
+                "stereo setting unchanged. More buffering may reduce short cuts but adds latency; " +
+                "it cannot fix indefinitely late audio. Queue tests log underruns every 5 seconds " +
+                "without recording audio. Not a confirmed fix. Restore Saved/default to undo queue tuning.",
+                12, 0xFFA8B9C4, false));
 
-        playButton = new Button(this);
-        playButton.setText("Play");
-        playButton.setEnabled(hasGameFiles());
-        playButton.setOnClickListener(view -> startGame());
-        addAction(card(layout, "Launch", "Gamepad supported · touch controls experimental"),
-                playButton, true);
+        LinearLayout diagnosticsCard = card(layout, "Diagnostics", "Automatic · no manual export required");
+        logStatus = label(MclaLogExporter.status(this), 13, 0xFF70DFCA, false);
+        diagnosticsCard.addView(label(MclaFrameGeneration.available(this) ?
+                "LSFG: user DLL available privately (not included in APK)." :
+                "LSFG: user DLL not installed; generation will remain off.", 13, 0xFFA8B9C4, false));
+        diagnosticsCard.addView(logStatus);
+        diagnosticsCard.addView(label("Logs are saved automatically to Documents/MCLA/logs/" +
+                "MCLA-diagnostic.txt. Sessions include dates, time zones and source labels. " +
+                "The file is limited to 8 MiB; older text is trimmed to keep recent history. " +
+                "Updates run in the background, approximately every 30 seconds and when leaving the game. " +
+                "No video or audio capture. Review diagnostic text before sharing it.",
+                13, 0xFFA8B9C4, false));
 
+        // Keep everyday settings before advanced and diagnostic sections.
+        View controlsSection = (View) controlsCard.getParent();
+        layout.removeView(controlsSection);
+        layout.addView(controlsSection, layout.indexOfChild((View) graphicsCard.getParent()));
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(0xFF0B161F);
@@ -334,20 +488,21 @@ public final class MclaLauncherActivity extends Activity {
                 .getBoolean("low_latency", false);
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        MclaLogExporter.exportAsync(this);
+        if (logStatus != null) logStatus.setText(MclaLogExporter.status(this));
+        for (int i = 0; i < cheatSwitches.length; i++) {
+            if (cheatSwitches[i] != null) cheatSwitches[i].setChecked(
+                    getSharedPreferences(MclaCheats.PREFS, MODE_PRIVATE)
+                            .getBoolean(MclaCheats.KEYS[i], false));
+        }
+    }
+
     private boolean shaderPackAuto() {
         return getSharedPreferences("redmagic_diagnostics", MODE_PRIVATE)
                 .getBoolean("shader_pack_auto", true);
-    }
-
-    private boolean adaptiveQueue() {
-        return getSharedPreferences("redmagic_diagnostics", MODE_PRIVATE)
-                .getBoolean("adaptive_queue", false);
-    }
-
-    private void updateAdaptiveQueueStatus() {
-        adaptiveQueueButton.setText(adaptiveQueue()
-                ? "Adaptive audio queue: ON (next Play)"
-                : "Adaptive audio queue: OFF (next Play)");
     }
 
     private void updateAudioStatus() {
@@ -368,8 +523,9 @@ public final class MclaLauncherActivity extends Activity {
         String driverLabel = "Turnip";
         String suffix = "";
         if (custom) {
-            String debug = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                    .getString("tu_debug", "syncdraw");
+            String debug = getSharedPreferences(MclaBuildVariant.isAdrenoDiagnostic(this) ?
+                    "driver_debug_a730" : "driver_debug", MODE_PRIVATE)
+                    .getString("tu_debug", MclaBuildVariant.isAdrenoDiagnostic(this) ? "" : "syncdraw");
             if (new File(getFilesDir(), "driver.env").isFile()) {
                 suffix = " (driver.env override)";
             } else {

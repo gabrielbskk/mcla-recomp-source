@@ -73,6 +73,20 @@ done
 for lib in libmain.so; do
     [ -f "$LIBS/$lib" ] || { echo "Build $lib first" >&2; exit 1; }
 done
+MANIFEST="$ROOT/android/AndroidManifest.xml"
+if [ "${MCLA_APK_VARIANT:-}" = adreno-diagnostic ]; then
+    MANIFEST="$ROOT/android/AndroidManifest-adreno-diagnostic.xml"
+    if ! grep -aq 'A730 diagnostic: watchdog started' "$LIBS/libmain.so"; then
+        echo 'Diagnostic native library marker missing; rebuild with MCLA_ADRENO_DIAGNOSTIC_APK=ON' >&2
+        exit 1
+    fi
+elif [ -n "${MCLA_APK_VARIANT:-}" ]; then
+    echo "Unknown MCLA_APK_VARIANT: $MCLA_APK_VARIANT" >&2
+    exit 1
+elif grep -aq 'A730 diagnostic: watchdog started' "$LIBS/libmain.so"; then
+    echo 'Diagnostic native library detected: pass MCLA_APK_VARIANT=adreno-diagnostic or rebuild with MCLA_ADRENO_DIAGNOSTIC_APK=OFF' >&2
+    exit 1
+fi
 [ -f "$RUNTIME/librexgpu-xenos.so" ] || { echo "Build and install librexgpu-xenos.so first" >&2; exit 1; }
 for lib in "$ADRENO/libadrenotools.so" "$ADRENO/src/hook/libhook_impl.so" \
            "$ADRENO/src/hook/libmain_hook.so" \
@@ -84,14 +98,43 @@ done
 rm -rf "$OUT/stage"
 mkdir -p "$OUT/stage/classes" "$OUT/stage/dex" "$OUT/stage/jni/arm64-v8a" "$OUT/stage/apk"
 
+case "${MCLA_S23_PERFORMANCE_DEFAULT:-0}" in
+    0) ;;
+    1)
+        python3 - "$MANIFEST" "$OUT/stage/AndroidManifest.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+ns = 'http://schemas.android.com/apk/res/android'
+ET.register_namespace('android', ns)
+tree = ET.parse(sys.argv[1])
+ET.SubElement(tree.getroot().find('application'), 'meta-data', {
+    '{'+ns+'}name': 'org.mcla.recomp.S23_PERFORMANCE_DEFAULT',
+    '{'+ns+'}value': 'true'})
+tree.write(sys.argv[2], encoding='utf-8', xml_declaration=True)
+PY
+        MANIFEST="$OUT/stage/AndroidManifest.xml"
+        ;;
+    *) echo 'MCLA_S23_PERFORMANCE_DEFAULT must be 0 or 1' >&2; exit 1 ;;
+esac
+
 find "$SDL" -name '*.java' -print > "$OUT/stage/java-sources.txt"
 printf '%s\n' "$ROOT/android/MclaActivity.java" >> "$OUT/stage/java-sources.txt"
-printf '%s\n' "$ROOT/android/MclaKeyboardMouse.java" >> "$OUT/stage/java-sources.txt"
 printf '%s\n' "$ROOT/android/MclaTouchControls.java" >> "$OUT/stage/java-sources.txt"
 printf '%s\n' "$ROOT/android/MclaTouchEditorActivity.java" >> "$OUT/stage/java-sources.txt"
 printf '%s\n' "$ROOT/android/MclaLauncherActivity.java" >> "$OUT/stage/java-sources.txt"
 printf '%s\n' "$ROOT/android/MclaLogExporter.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaLogChunk.java" >> "$OUT/stage/java-sources.txt"
 printf '%s\n' "$ROOT/android/MclaBuildVariant.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaGpuAdvisor.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaGraphicsProfiles.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaKeyboardMouse.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaAudioTuning.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaPerformanceProfile.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaCheats.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaWorldOptions.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaFrameGeneration.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaTouchLayout.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaTouchStick.java" >> "$OUT/stage/java-sources.txt"
+printf '%s\n' "$ROOT/android/MclaAdrenoDiagnostics.java" >> "$OUT/stage/java-sources.txt"
 javac -encoding UTF-8 --release 8 -classpath "$PLATFORM" \
     -d "$OUT/stage/classes" @"$OUT/stage/java-sources.txt"
 python3 - "$D8" "$PLATFORM" "$OUT/stage/dex" "$OUT/stage/classes" <<'PY'
@@ -103,11 +146,25 @@ subprocess.run(["java", "-cp", d8, "com.android.tools.r8.D8", "--release",
                check=True)
 PY
 
-aapt2 link -o "$OUT/stage/apk/base.apk" -I "$PLATFORM" \
-    --manifest "$ROOT/android/AndroidManifest.xml" --min-sdk-version 23 --target-sdk-version 35 \
-    --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
+if [ "${MCLA_APK_VARIANT:-}" = adreno-diagnostic ]; then
+    aapt2 compile --dir "$ROOT/android/diagnostic-res" -o "$OUT/stage/apk/diagnostic-res.zip"
+    aapt2 link -o "$OUT/stage/apk/base.apk" -I "$PLATFORM" \
+        --manifest "$MANIFEST" --min-sdk-version 23 --target-sdk-version 35 \
+        --version-code "$VERSION_CODE" --version-name "$VERSION_NAME" \
+        -R "$OUT/stage/apk/diagnostic-res.zip"
+else
+    aapt2 link -o "$OUT/stage/apk/base.apk" -I "$PLATFORM" \
+        --manifest "$MANIFEST" --min-sdk-version 23 --target-sdk-version 35 \
+        --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
+fi
 
 cp "$LIBS/libmain.so" "$OUT/stage/jni/arm64-v8a/"
+if [ "${MCLA_INCLUDE_LSFG:-0}" = 1 ]; then
+    [ -f "$ROOT/out/build/mcla-lsfg-arm64/libmcla_lsfg.so" ] || { echo 'Build optional LSFG backend first' >&2; exit 1; }
+    cp "$ROOT/out/build/mcla-lsfg-arm64/libmcla_lsfg.so" "$OUT/stage/jni/arm64-v8a/"
+    mkdir -p "$OUT/stage/apk/assets"
+    cp "$ROOT/out/build/mcla-lsfg-arm64/THIRD-PARTY-NOTICES.txt" "$OUT/stage/apk/assets/lsfg-third-party-notices.txt"
+fi
 cp "$RUNTIME/librexgpu-xenos.so" "$OUT/stage/jni/arm64-v8a/"
 cp "$RUNTIME/libSDL3.so" "$RUNTIME/librexruntime.so" "$OUT/stage/jni/arm64-v8a/"
 cp "${PREFIX:?Termux PREFIX is required}/lib/libc++_shared.so" "$OUT/stage/jni/arm64-v8a/"
@@ -136,6 +193,9 @@ import pathlib, sys, zipfile
 apk, dex, jni = map(pathlib.Path, sys.argv[1:])
 with zipfile.ZipFile(apk, "a", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
     zf.write(dex, "classes.dex")
+    notices = apk.parent / 'assets/lsfg-third-party-notices.txt'
+    if notices.is_file():
+        zf.write(notices, 'assets/lsfg-third-party-notices.txt')
     for path in sorted(jni.rglob("*.so")):
         zf.write(path, "lib/arm64-v8a/" + path.name,
                  compress_type=zipfile.ZIP_STORED)

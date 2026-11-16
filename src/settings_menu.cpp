@@ -440,14 +440,22 @@ constexpr int kFpsTargetCount = int(sizeof(kFpsTargets) / sizeof(kFpsTargets[0])
 constexpr double kFpsTargetsHalf[] = {-1.0, 30.0, 40.0, 45.0, 50.0, 60.0, 120.0, 0.0};
 constexpr int kFpsTargetHalfCount = int(sizeof(kFpsTargetsHalf) / sizeof(kFpsTargetsHalf[0]));
 #endif
-// frame_generation (the SDK's): off, or AMD FSR 3.1; it changes during play, on
-// both graphics APIs (src/perf_options.cpp has the same for anti-aliasing). Built for
-// Linux and the console, but not yet run on either.
+// frame_generation (the SDK's): off, or a frame generated between every two.
+// On Android the generator is LSFG (the private user DLL, loaded through
+// REX_MCLA_LSFG), and FSR 3.1 isn't built into the Android build; elsewhere it's
+// AMD FSR 3.1. It changes during play, on both graphics APIs (src/perf_options.cpp
+// has the same for anti-aliasing). Built for Linux and the console, but not yet
+// run on either.
+#if REX_PLATFORM_ANDROID
+constexpr const char* kFrameGenerationValues[] = {"off", "lsfg"};
+constexpr const char* kFrameGenerationLabels[] = {"OFF", "LSFG 2X (USER DLL)"};
+#else
 constexpr const char* kFrameGenerationValues[] = {"off", "fsr"};
 #if REX_PLATFORM_WIN32
 constexpr const char* kFrameGenerationLabels[] = {"OFF", "FSR 3.1"};
 #else
 constexpr const char* kFrameGenerationLabels[] = {"OFF", "FSR 3.1 (UNTESTED)"};
+#endif
 #endif
 // low_latency (the SDK's): the GPU vendor's latency reducer, NVIDIA Reflex or AMD Anti-Lag 2,
 // named in plain text by the row (RowLabel). Boost is Reflex's; frame generation turns it on and

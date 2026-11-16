@@ -11,6 +11,7 @@
 // config/frame_timing.toml).
 
 #include "generated/default/mcla_init.h"
+#include "android_diagnostics.h"
 
 #include "mcla_app.h"
 #include "pc_triggers.h"
@@ -772,6 +773,9 @@ void mcla_frame_start(PPCRegister& r3) {
 }
 
 void mcla_frame_delta(PPCRegister& r8) {
+#if defined(MCLA_ADRENO_DIAGNOSTIC_APK)
+  mcla::diagnostics::RecordUpdate();
+#endif
   mcla::RecordGameUpdate();
   MclaProfileCountUpdate();
   MclaTickButtonPrompts();
@@ -850,6 +854,9 @@ static void PaceUnlimitedSwap(bool timed) {
 }
 
 bool mcla_present_interval(PPCRegister& r11) {
+#if defined(MCLA_ADRENO_DIAGNOSTIC_APK)
+  mcla::diagnostics::RecordSwap();
+#endif
   MclaProfileCountSwap();
   MclaDevPadSwap();
   MclaApplyMsaaAtSwap();
