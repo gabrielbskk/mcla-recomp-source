@@ -1,0 +1,19 @@
+name: Discord Push
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Discord
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK_PUSHES }}
+          title: "📝 Push em ${{ github.ref_name }}"
+          description: "${{ github.event.head_commit.message }}"
+          color: 3447003
+          fields: '[{"name": "Autor", "value": "${{ github.actor }}", "inline": true}, {"name": "Commits", "value": "${{ github.event.commits.length }}", "inline": true}, {"name": "🔗 Ver diff", "value": "[GitHub](${{ github.event.compare }})", "inline": true}]'
+          username: "GitHub Source"
+          avatar_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
