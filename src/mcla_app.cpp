@@ -1090,9 +1090,12 @@ void MclaApp::ApplyPcDefaults() {
       {"shared_memory_hot_page_ms", "10000"},
       {"edram_tiles", "4096"},
       {"render_target_max_height", "1024"},
+#if REX_PLATFORM_ANDROID
+      {"render_target_trim_seconds", "20"},
+      {"gpu_memory_pressure_percent", "80"},
+#else
       {"render_target_trim_seconds", "60"},
       {"gpu_memory_pressure_percent", "90"},
-#if !REX_PLATFORM_ANDROID
       {"anisotropic_override", "5"},
 #endif
 #if REX_PLATFORM_ANDROID
@@ -1116,10 +1119,16 @@ void MclaApp::ApplyPcDefaults() {
       // 644-line mode repeatedly faulted during loading.
       {"mcla_render_height", "720"},
       // Output 2-channel stereo on Android (compatible with AAudio FastTrack on
-      // Galaxy S23 and spatial audio on RedMagic, 3x less SDL sample bandwidth)
-      // and isolate the audio client mutex from global_critical_region_.
+      // Galaxy S23 and spatial audio on RedMagic, 3x less SDL sample bandwidth),
+      // raise Audio Worker + XMA Decoder + guest Mixer scheduling priority, and
+      // use an adaptive 16..28 frame queue (85..149 ms) to absorb shader stalls.
       {"audio_android_force_stereo", "true"},
       {"audio_client_lock", "true"},
+      {"audio_maxqframes", "16"},
+      {"audio_adaptive_queue", "true"},
+      {"audio_adaptive_queue_max", "28"},
+      {"audio_thread_priority", "1"},
+      {"audio_mixer_priority", "1"},
       // Skip Windows-only HDR render-marker scans on Android.
       {"mcla_render_markers", "false"},
 #endif

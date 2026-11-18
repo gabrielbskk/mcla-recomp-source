@@ -1,36 +1,35 @@
 package org.mcla.recomp;
 
-import android.media.AudioAttributes;
-import android.media.AudioFocusRequest;
-import android.media.AudioManager;
-import android.os.Bundle;
-import android.os.Build;
-import android.os.PowerManager;
-import android.os.Handler;
-import android.os.Looper;
-import android.system.Os;
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.input.InputManager;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
+import android.system.Os;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.InputDevice;
 import android.view.View;
-import android.widget.RelativeLayout;
-import android.widget.TextView;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
-import org.libsdl.app.SDLActivity;
-import java.io.File;
+import android.widget.RelativeLayout;
+import android.widget.TextView;
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
+import org.libsdl.app.SDLActivity;
 
 public final class MclaActivity extends SDLActivity {
     private static final String TAG = "MCLA";
@@ -109,12 +108,14 @@ public final class MclaActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle state) {
-        applyGraphicsEnvironment();
-        applyAudioEnvironment();
+        fpsOverlayEnabled = MclaRuntimeProfiles.fpsOverlay(this);
+        MclaRuntimeProfiles.applyAll(this);
         MclaKeyboardMouse.apply(this);
         applyRedMagicShaderEnvironment();
         applyLogEnvironment();
         applyDriverDebugEnvironment();
+        MclaLogExporter.startPeriodic(this);
+
         File source = new File(getApplicationInfo().nativeLibraryDir, "librexgpu-xenos.so");
         File target = new File(getFilesDir(), "librexgpu-xenos.so");
         boolean needsPluginCopy = !target.isFile()
@@ -145,7 +146,7 @@ public final class MclaActivity extends SDLActivity {
                         RelativeLayout.LayoutParams.WRAP_CONTENT);
                 hudParams.addRule(RelativeLayout.ALIGN_PARENT_TOP);
                 hudParams.addRule(RelativeLayout.ALIGN_PARENT_LEFT);
-                hudParams.setMargins(dp(12), dp(10), 0, 0);
+                hudParams.setMargins(dp(14), dp(10), 0, 0);
                 mLayout.addView(fpsOverlayView, hudParams);
             }
             inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
@@ -155,8 +156,7 @@ public final class MclaActivity extends SDLActivity {
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         if (Build.VERSION.SDK_INT >= 24) {
-            boolean sustained = getSharedPreferences("graphics", MODE_PRIVATE)
-                    .getBoolean("sustained_perf_s23", true);
+            boolean sustained = MclaRuntimeProfiles.sustainedPerformance(this);
             PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (power != null && power.isSustainedPerformanceModeSupported()) {
                 getWindow().setSustainedPerformanceMode(sustained);
@@ -173,12 +173,12 @@ public final class MclaActivity extends SDLActivity {
     private TextView createFpsOverlayView() {
         TextView view = new TextView(this);
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xB4000000);
-        bg.setCornerRadius(dp(8));
-        bg.setStroke(Math.max(1, dp(1)), 0x3870DFCA);
+        bg.setColor(0xCC070D14);
+        bg.setCornerRadius(dp(9));
+        bg.setStroke(Math.max(1, dp(1)), 0x6638BDF8);
         view.setBackground(bg);
-        view.setPadding(dp(8), dp(4), dp(8), dp(4));
-        view.setTextColor(Color.WHITE);
+        view.setPadding(dp(9), dp(4), dp(9), dp(4));
+        view.setTextColor(0xFFEAF6FF);
         view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
         view.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         view.setIncludeFontPadding(false);
@@ -189,26 +189,10 @@ public final class MclaActivity extends SDLActivity {
         return view;
     }
 
-    private void applyGraphicsEnvironment() {
-        SharedPreferences prefs = getSharedPreferences("graphics", MODE_PRIVATE);
-        fpsOverlayEnabled = prefs.getBoolean("fps_overlay", true);
-        try {
-            Os.setenv("REX_MCLA_FPS_OVERLAY", fpsOverlayEnabled ? "true" : "false", true);
-            // Clear any legacy launcher overrides so mcla.toml (in-game pause menu)
-            // and mobile defaults in ApplyPcDefaults() govern rendering cleanly.
-            Os.unsetenv("REX_MCLA_PRESET");
-            Os.unsetenv("REX_MCLA_ANTI_ALIASING");
-            Os.unsetenv("REX_MCLA_FAR_SHADOW_INTERVAL");
-            Os.unsetenv("REX_MCLA_ENV_MAP_INTERVAL");
-            Os.unsetenv("REX_MCLA_REFLECTION_INTERVAL");
-        } catch (Exception e) {
-            Log.e(TAG, "Could not apply graphics environment", e);
-        }
-    }
-
     private void applyLogEnvironment() {
         // One stable log basename across launches; bounded rotation keeps
-        // warnings from consuming unlimited private storage.
+        // warnings from consuming unlimited private storage while MclaLogExporter
+        // mirrors live chunks to Documents/MCLA/logs/MCLA-diagnostic.txt.
         File directory = new File(getFilesDir(), "logs");
         if (!directory.isDirectory() && !directory.mkdirs()) {
             Log.e(TAG, "Could not create log directory");
@@ -220,33 +204,6 @@ public final class MclaActivity extends SDLActivity {
             Os.setenv("REX_LOG_MAX_FILE_SIZE_MB", "10", true);
         } catch (Exception e) {
             Log.e(TAG, "Could not configure the single log", e);
-        }
-    }
-
-    private void applyAudioEnvironment() {
-        // Force 2-channel stereo output on Android (avoids 6-channel 5.1 mixing
-        // overhead on phone speakers/headphones) and apply user latency mode.
-        boolean stereoTest = MclaBuildVariant.isRedMagicAudioTest(this);
-        boolean lowLatency = !stereoTest && getSharedPreferences("audio", MODE_PRIVATE)
-                .getBoolean("low_latency", false);
-        try {
-            Os.setenv("REX_AUDIO_ANDROID_FORCE_STEREO", "true", true);
-            if (stereoTest) {
-                boolean adaptive = getSharedPreferences("redmagic_diagnostics", MODE_PRIVATE)
-                        .getBoolean("adaptive_queue", false);
-                Os.setenv("REX_AUDIO_ADAPTIVE_QUEUE", adaptive ? "true" : "false", true);
-                Log.i(TAG, "RedMagic audio diagnostic: stereo output, normal mixer, adaptive queue="
-                        + adaptive);
-            } else {
-                Os.unsetenv("REX_AUDIO_ADAPTIVE_QUEUE");
-            }
-            if (lowLatency) {
-                Os.setenv("REX_MCLA_AUDIO_LOW_LATENCY", "true", true);
-            } else {
-                Os.unsetenv("REX_MCLA_AUDIO_LOW_LATENCY");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Could not apply the audio mode", e);
         }
     }
 
@@ -345,6 +302,7 @@ public final class MclaActivity extends SDLActivity {
     protected void onResume() {
         super.onResume();
         activityResumed = true;
+        MclaLogExporter.startPeriodic(this);
         requestAudioFocus();
         updateGamepad();
         if (touchControls != null) touchControls.resumeControls();
@@ -370,6 +328,7 @@ public final class MclaActivity extends SDLActivity {
         uiHandler.removeCallbacks(perfOverlayTick);
         if (inputManager != null) inputManager.unregisterInputDeviceListener(gamepadListener);
         if (touchControls != null) touchControls.clearInput();
+        MclaLogExporter.stopPeriodic();
         MclaLogExporter.exportAsync(this);
         super.onDestroy();
     }

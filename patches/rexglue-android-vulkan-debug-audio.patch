@@ -1,0 +1,174 @@
+diff --git a/src/audio/audio_thread.cpp b/src/audio/audio_thread.cpp
+index 926e8b28..e08dbf16 100644
+--- a/src/audio/audio_thread.cpp
++++ b/src/audio/audio_thread.cpp
+@@ -16,6 +16,11 @@
+ #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
++#elif defined(__ANDROID__) || defined(__linux__)
++#include <cerrno>
++#include <ctime>
++#include <sys/resource.h>
++#include <unistd.h>
+ #endif
+ 
+ #include <algorithm>
+@@ -113,6 +118,22 @@ bool RaiseCallingAudioThread([[maybe_unused]] int32_t level, [[maybe_unused]] co
+                 level);
+   }
+   return set;
++#elif defined(__ANDROID__) || defined(__linux__)
++  if (level <= 0) {
++    return false;
++  }
++  const int target_nice = (level >= 2) ? -12 : -8;
++  errno = 0;
++  if (setpriority(PRIO_PROCESS, 0, target_nice) == 0) {
++    REXAPU_INFO("{}: host nice priority {} (level {})", thread_name, target_nice, level);
++    return true;
++  }
++  if (target_nice < -4 && setpriority(PRIO_PROCESS, 0, -4) == 0) {
++    REXAPU_INFO("{}: host nice priority -4 fallback (level {})", thread_name, level);
++    return true;
++  }
++  REXAPU_WARN("{}: host nice priority NOT raised (errno {}, level {})", thread_name, errno, level);
++  return false;
+ #else
+   return false;
+ #endif
+@@ -180,6 +201,20 @@ uint64_t ThreadCpuNs() {
+ bool ThreadCpuAvailable() {
+   return g_cycles_per_ns > 0.0;
+ }
++#elif defined(__ANDROID__) || defined(__linux__)
++void InitThreadCpuClock() {}
++uint64_t ThreadCpuNs() {
++  struct timespec ts{};
++  if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) {
++    return 0;
++  }
++  return static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ULL +
++         static_cast<uint64_t>(ts.tv_nsec);
++}
++bool ThreadCpuAvailable() {
++  struct timespec ts{};
++  return clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0;
++}
+ #else
+ void InitThreadCpuClock() {}
+ uint64_t ThreadCpuNs() {
+diff --git a/src/audio/sdl/sdl_audio_driver.cpp b/src/audio/sdl/sdl_audio_driver.cpp
+index a8d29176..fdfc2e7a 100644
+--- a/src/audio/sdl/sdl_audio_driver.cpp
++++ b/src/audio/sdl/sdl_audio_driver.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <cstdlib>
+ #include <cstring>
+ 
+ #include <rex/assert.h>
+@@ -62,6 +63,10 @@ SDLAudioDriver::~SDLAudioDriver() {
+ bool SDLAudioDriver::Initialize() {
+   // Set audio category for proper OS audio handling
+   SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
++  if (const char* sample_frames = std::getenv("SDL_AUDIO_DEVICE_SAMPLE_FRAMES");
++      sample_frames && sample_frames[0] != '\0') {
++    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, sample_frames);
++  }
+ 
+   // Set app name for audio device identification
+   SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_NAME_STRING, "rexglue");
+@@ -228,13 +233,20 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+   }
+   while (additional_amount > 0) {
+     static uint32_t sdl_callback_count = 0;
+-    std::unique_lock<std::mutex> guard(driver->frames_mutex_);
+-    if (stats && first_pass) {
+-      // Frames waiting when the device asked for more: 0 means this callback runs dry.
+-      dump::Min(dump::C().sdl_queue_min, driver->frames_queued_.size());
+-      first_pass = false;
++    float* buffer = nullptr;
++    {
++      std::unique_lock<std::mutex> guard(driver->frames_mutex_);
++      if (stats && first_pass) {
++        // Frames waiting when the device asked for more: 0 means this callback runs dry.
++        dump::Min(dump::C().sdl_queue_min, driver->frames_queued_.size());
++        first_pass = false;
++      }
++      if (!driver->frames_queued_.empty()) {
++        buffer = driver->frames_queued_.front();
++        driver->frames_queued_.pop();
++      }
+     }
+-    if (driver->frames_queued_.empty()) {
++    if (!buffer) {
+       if (sdl_callback_count < 10) {
+         REXAPU_DEBUG("SDLCallback: no frames queued (silence)");
+         sdl_callback_count++;
+@@ -282,8 +294,6 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+       }
+       additional_amount -= len;
+     } else {
+-      auto buffer = driver->frames_queued_.front();
+-      driver->frames_queued_.pop();
+       // Muted runs still convert when a dump is being written: the dump is the mix before the mute.
+       const bool muted = REXCVAR_GET(audio_mute);
+       if (muted && !driver->mix_dump_.is_open()) {
+@@ -314,12 +324,15 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
+       if (muted) {
+         std::memset(data, 0, len);
+       }
+-      if (!SDL_PutAudioStreamData(stream, data, len)) {
+-        REXAPU_ERROR("SDL_PutAudioStreamData() failed: {}", SDL_GetError());
++      const bool stream_ok = SDL_PutAudioStreamData(stream, data, len);
++      {
++        std::unique_lock<std::mutex> guard(driver->frames_mutex_);
+         driver->frames_unused_.push(buffer);
++      }
++      if (!stream_ok) {
++        REXAPU_ERROR("SDL_PutAudioStreamData() failed: {}", SDL_GetError());
+         break;
+       }
+-      driver->frames_unused_.push(buffer);
+ 
+       if (stats) {
+         dump::C().last_release_us.store(dump::NowUs(), std::memory_order_relaxed);
+diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
+index 13f3743f..4e79be01 100644
+--- a/src/ui/vulkan/vulkan_instance.cpp
++++ b/src/ui/vulkan/vulkan_instance.cpp
+@@ -31,7 +31,11 @@
+ #include "vulkan_moltenvk.h"
+ #endif
+ 
++#if REX_PLATFORM_ANDROID
++REXCVAR_DEFINE_BOOL(vulkan_log_debug_messages, false, "UI/Vulkan", "Log Vulkan debug messages");
++#else
+ REXCVAR_DEFINE_BOOL(vulkan_log_debug_messages, true, "UI/Vulkan", "Log Vulkan debug messages");
++#endif
+ 
+ #if REX_PLATFORM_PS5
+ // The statically linked driver's entry point. The driver is an ICD with no
+@@ -228,9 +232,19 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+         "VK_KHR_get_physical_device_properties2",
+         &vulkan_instance->extensions_.ext_1_1_KHR_get_physical_device_properties2);
+   }
++#if REX_PLATFORM_ANDROID
++  // On Qualcomm's proprietary Android Vulkan driver, enabling VK_EXT_debug_utils
++  // and attaching VkDebugUtilsMessengerEXT fires thousands of VKDBGUTILWARN003
++  // callbacks per second across GPU threads even when validation is disabled.
++  if (try_enable_validation || REXCVAR_GET(vulkan_log_debug_messages)) {
++    requested_extensions.emplace("VK_EXT_debug_utils",
++                                 &vulkan_instance->extensions_.ext_EXT_debug_utils);
++  }
++#else
+   // #129.
+   requested_extensions.emplace("VK_EXT_debug_utils",
+                                &vulkan_instance->extensions_.ext_EXT_debug_utils);
++#endif
+   // #395.
+   requested_extensions.emplace("VK_KHR_portability_enumeration",
+                                &vulkan_instance->extensions_.ext_KHR_portability_enumeration);

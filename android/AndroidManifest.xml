@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <application
         android:label="MCLA Recomp"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:appCategory="game"
         android:isGame="true"
         android:allowBackup="false"

@@ -100,6 +100,8 @@ REXCVAR_DEFINE_DOUBLE(mcla_traffic_distance, 400.0, "MCLA",
     .range(100.0, 600.0);
 REXCVAR_DEFINE_DOUBLE(mcla_pedestrians, 1.0, "MCLA", "Pedestrian density scale").range(0.0, 1.0);
 REXCVAR_DEFINE_DOUBLE(mcla_parked_cars, 1.0, "MCLA", "Parked car density scale").range(0.0, 1.0);
+REXCVAR_DEFINE_BOOL(mcla_empty_streets, false, "MCLA",
+                    "Disable ambient street traffic, pedestrians, and parked cars (race opponents stay active)");
 // Off-screen render passes that are drawn only every few frames, the picture of the
 // last one kept in between (0 or 1: every frame, as shipped). After the scene itself
 // they are what a weak GPU pays most for (archive/fork-base/launcher/dev/gpu-weak-2026-10-27.md).
@@ -420,8 +422,15 @@ struct Zone {
 std::mutex g_zones_mutex;
 std::vector<Zone> g_zones;
 double g_applied_distance = 400.0, g_applied_pedestrians = 1.0, g_applied_parked = 1.0;
+bool g_applied_empty_streets = false;
 
 void WriteZone(uint8_t* base, const Zone& zone) {
+  if (REXCVAR_GET(mcla_empty_streets)) {
+    WriteFloat(base, zone.address + kZoneTrafficUnspawn, 0.0f);
+    WriteFloat(base, zone.address + kZonePedestrians, 0.0f);
+    WriteFloat(base, zone.address + kZoneParkedCars, 0.0f);
+    return;
+  }
   const double distance = REXCVAR_GET(mcla_traffic_distance);
   // The option is the shipped zone's 400 m scaled; zones keep their own ratio.
   WriteFloat(base, zone.address + kZoneTrafficUnspawn, float(zone.unspawn * (distance / 400.0)));
@@ -435,8 +444,9 @@ void ApplyAmbientIfChanged(uint8_t* base) {
   const double distance = REXCVAR_GET(mcla_traffic_distance);
   const double pedestrians = REXCVAR_GET(mcla_pedestrians);
   const double parked = REXCVAR_GET(mcla_parked_cars);
+  const bool empty_streets = REXCVAR_GET(mcla_empty_streets);
   if (distance == g_applied_distance && pedestrians == g_applied_pedestrians &&
-      parked == g_applied_parked) {
+      parked == g_applied_parked && empty_streets == g_applied_empty_streets) {
     return;
   }
   std::lock_guard<std::mutex> lock(g_zones_mutex);
@@ -446,7 +456,9 @@ void ApplyAmbientIfChanged(uint8_t* base) {
   g_applied_distance = distance;
   g_applied_pedestrians = pedestrians;
   g_applied_parked = parked;
-  REXLOG_INFO("perf options: ambient density applied to {} zones", g_zones.size());
+  g_applied_empty_streets = empty_streets;
+  REXLOG_INFO("perf options: ambient density applied to {} zones (empty_streets={})",
+              g_zones.size(), empty_streets);
 }
 
 }  // namespace

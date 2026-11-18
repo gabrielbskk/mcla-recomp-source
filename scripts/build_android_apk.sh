@@ -93,13 +93,7 @@ rm -rf "$OUT/stage"
 mkdir -p "$OUT/stage/classes" "$OUT/stage/dex" "$OUT/stage/jni/arm64-v8a" "$OUT/stage/apk"
 
 find "$SDL" -name '*.java' -print > "$OUT/stage/java-sources.txt"
-printf '%s\n' "$ROOT/android/MclaActivity.java" >> "$OUT/stage/java-sources.txt"
-printf '%s\n' "$ROOT/android/MclaKeyboardMouse.java" >> "$OUT/stage/java-sources.txt"
-printf '%s\n' "$ROOT/android/MclaTouchControls.java" >> "$OUT/stage/java-sources.txt"
-printf '%s\n' "$ROOT/android/MclaTouchEditorActivity.java" >> "$OUT/stage/java-sources.txt"
-printf '%s\n' "$ROOT/android/MclaLauncherActivity.java" >> "$OUT/stage/java-sources.txt"
-printf '%s\n' "$ROOT/android/MclaLogExporter.java" >> "$OUT/stage/java-sources.txt"
-printf '%s\n' "$ROOT/android/MclaBuildVariant.java" >> "$OUT/stage/java-sources.txt"
+find "$ROOT/android" -maxdepth 1 -name '*.java' -print | sort >> "$OUT/stage/java-sources.txt"
 javac -encoding UTF-8 --release 8 -classpath "$PLATFORM" \
     -d "$OUT/stage/classes" @"$OUT/stage/java-sources.txt"
 python3 - "$D8" "$PLATFORM" "$OUT/stage/dex" "$OUT/stage/classes" <<'PY'
@@ -111,9 +105,17 @@ subprocess.run(["java", "-cp", d8, "com.android.tools.r8.D8", "--release",
                check=True)
 PY
 
-aapt2 link -o "$OUT/stage/apk/base.apk" -I "$PLATFORM" \
-    --manifest "$ROOT/android/AndroidManifest.xml" --min-sdk-version 23 --target-sdk-version 35 \
-    --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
+if [ -d "$ROOT/android/res" ]; then
+    aapt2 compile --dir "$ROOT/android/res" -o "$OUT/stage/res.zip"
+    aapt2 link -o "$OUT/stage/apk/base.apk" -I "$PLATFORM" \
+        --auto-add-overlay -R "$OUT/stage/res.zip" \
+        --manifest "$ROOT/android/AndroidManifest.xml" --min-sdk-version 23 --target-sdk-version 35 \
+        --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
+else
+    aapt2 link -o "$OUT/stage/apk/base.apk" -I "$PLATFORM" \
+        --manifest "$ROOT/android/AndroidManifest.xml" --min-sdk-version 23 --target-sdk-version 35 \
+        --version-code "$VERSION_CODE" --version-name "$VERSION_NAME"
+fi
 
 cp "$LIBS/libmain.so" "$OUT/stage/jni/arm64-v8a/"
 cp "$RUNTIME/librexgpu-xenos.so" "$OUT/stage/jni/arm64-v8a/"

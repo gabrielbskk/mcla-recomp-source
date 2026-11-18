@@ -95,7 +95,8 @@ jobs:
             rexglue-vulkan-frame-start-sync.patch \
             rexglue-android-bionic-link.patch \
             rexglue-android-driver-selection.patch \
-            rexglue-android-stereo-diagnostic.patch; do
+            rexglue-android-stereo-diagnostic.patch \
+            rexglue-android-vulkan-debug-audio.patch; do
             git -C "$sdk" apply "$GITHUB_WORKSPACE/patches/$patch"
           done
 
