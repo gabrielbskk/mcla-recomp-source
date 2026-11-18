@@ -1092,8 +1092,14 @@ void MclaApp::ApplyPcDefaults() {
       {"render_target_max_height", "1024"},
       {"render_target_trim_seconds", "60"},
       {"gpu_memory_pressure_percent", "90"},
+#if !REX_PLATFORM_ANDROID
       {"anisotropic_override", "5"},
+#endif
 #if REX_PLATFORM_ANDROID
+      // Default mobile GPUs to trilinear/bilinear filtering and MSAA off to save
+      // LPDDR5X and TMU bandwidth while letting any user choice in mcla.toml win.
+      {"anisotropic_override", "0"},
+      {"mcla_anti_aliasing", "off"},
       // Keep the driver pipeline cache across launches on Android. The shader
       // description storage alone still recreates every VkPipeline each run.
       {"vulkan_pipeline_cache_file", "true"},
@@ -1105,31 +1111,16 @@ void MclaApp::ApplyPcDefaults() {
       // pipelines are compiled. One interval plus a little keeps the hold to a
       // single frame; the object appears as soon as its pipeline is ready.
       {"vulkan_async_skip_incomplete_frames_max_ms", "40"},
-      // Keep the guest video mode at 720 lines. On the tested Galaxy S23,
-      // the experimental 644-line mode repeatedly faulted during loading;
-      // forcing 720 in mcla.toml allowed gameplay to start.
+      // Keep the guest video mode at 720 lines while VulkanPresenter scales to
+      // the full native panel. On the tested Galaxy S23, the experimental
+      // 644-line mode repeatedly faulted during loading.
       {"mcla_render_height", "720"},
-      // Preserve Adreno UBWC lossless hardware compression on EDRAM-resolved
-      // textures by avoiding VK_IMAGE_USAGE_STORAGE_BIT + mutable UINT views.
-      {"texture_load_direct_unscaled", "false"},
-      // Invalidate 4 pages (16 KiB) per guest write fault instead of 64 pages
-      // (256 KiB / 1 MiB on 16K kernels), slashing mprotect + re-upload churn.
-      {"shared_memory_invalidation_pages_log2", "2"},
       // Output 2-channel stereo on Android (compatible with AAudio FastTrack on
-      // Galaxy S23 and spatial audio on RedMagic, 3x less SDL sample bandwidth),
-      // isolate the audio client mutex from global_critical_region_, and raise
-      // both audio worker and guest mixer priorities.
+      // Galaxy S23 and spatial audio on RedMagic, 3x less SDL sample bandwidth)
+      // and isolate the audio client mutex from global_critical_region_.
       {"audio_android_force_stereo", "true"},
       {"audio_client_lock", "true"},
-      {"audio_adaptive_queue", "true"},
-      {"audio_thread_priority", "2"},
-      {"audio_mixer_priority", "2"},
-      // Replace main-thread ring-buffer spin with futex waits, wake the render
-      // pump on demand, yield cleanly during GPU fence waits, and disable
-      // Windows-only HDR render markers.
-      {"mcla_pump_wake_on_demand", "true"},
-      {"mcla_poll_wait", "true"},
-      {"mcla_fence_sleep_us", "50"},
+      // Skip Windows-only HDR render-marker scans on Android.
       {"mcla_render_markers", "false"},
 #endif
 #if REX_PLATFORM_WIN32

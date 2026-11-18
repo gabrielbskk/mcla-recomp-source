@@ -16,11 +16,9 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.input.InputManager;
-import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.InputDevice;
-import android.view.SurfaceHolder;
 import android.view.View;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
@@ -135,7 +133,6 @@ public final class MclaActivity extends SDLActivity {
             }
         }
         super.onCreate(state);
-        applySurfaceScale();
         if (mLayout != null) {
             touchControls = new MclaTouchControls(this);
             mLayout.addView(touchControls, new RelativeLayout.LayoutParams(
@@ -159,13 +156,13 @@ public final class MclaActivity extends SDLActivity {
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         if (Build.VERSION.SDK_INT >= 24) {
             boolean sustained = getSharedPreferences("graphics", MODE_PRIVATE)
-                    .getBoolean("sustained_perf", false);
+                    .getBoolean("sustained_perf_s23", true);
             PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (power != null && power.isSustainedPerformanceModeSupported()) {
                 getWindow().setSustainedPerformanceMode(sustained);
                 Log.i(TAG, sustained
                         ? "Sustained performance mode enabled"
-                        : "Sustained performance mode disabled (full Snapdragon/Adreno boost allowed)");
+                        : "Sustained performance mode disabled");
             } else {
                 Log.i(TAG, "Sustained performance mode unavailable");
             }
@@ -192,60 +189,18 @@ public final class MclaActivity extends SDLActivity {
         return view;
     }
 
-    private void applySurfaceScale() {
-        if (mSurface == null) return;
-        SurfaceHolder holder = mSurface.getHolder();
-        if (holder == null) return;
-        int targetH = getSharedPreferences("graphics", MODE_PRIVATE)
-                .getInt("surface_height", 720);
-        DisplayMetrics realMetrics = new DisplayMetrics();
-        getWindowManager().getDefaultDisplay().getRealMetrics(realMetrics);
-        int rawW = Math.max(realMetrics.widthPixels, realMetrics.heightPixels);
-        int rawH = Math.min(realMetrics.widthPixels, realMetrics.heightPixels);
-        if (targetH > 0 && rawH > targetH) {
-            int scaledH = targetH & ~1;
-            int scaledW = (Math.round((float) rawW * (float) scaledH / (float) rawH) + 1) & ~1;
-            holder.setFixedSize(scaledW, scaledH);
-            Log.i(TAG, "Surface hardware DPU scaler: " + scaledW + "x" + scaledH
-                    + " -> panel " + rawW + "x" + rawH);
-        } else {
-            holder.setSizeFromLayout();
-            Log.i(TAG, "Surface native panel resolution: " + rawW + "x" + rawH);
-        }
-    }
-
     private void applyGraphicsEnvironment() {
         SharedPreferences prefs = getSharedPreferences("graphics", MODE_PRIVATE);
-        int profile = prefs.getInt("profile", 0);
         fpsOverlayEnabled = prefs.getBoolean("fps_overlay", true);
         try {
             Os.setenv("REX_MCLA_FPS_OVERLAY", fpsOverlayEnabled ? "true" : "false", true);
-            if (profile == 2) {
-                // Maximum FPS: full low preset (quarter-rate cubemaps/reflections, MSAA off).
-                Os.setenv("REX_MCLA_PRESET", "low", true);
-                Os.unsetenv("REX_MCLA_ANTI_ALIASING");
-                Os.unsetenv("REX_MCLA_FAR_SHADOW_INTERVAL");
-                Os.unsetenv("REX_MCLA_ENV_MAP_INTERVAL");
-                Os.unsetenv("REX_MCLA_REFLECTION_INTERVAL");
-                Log.i(TAG, "Graphics profile: maximum FPS (low preset)");
-            } else if (profile == 1) {
-                // Console original: 2x MSAA, every-frame reflections and shadows.
-                Os.unsetenv("REX_MCLA_PRESET");
-                Os.unsetenv("REX_MCLA_ANTI_ALIASING");
-                Os.unsetenv("REX_MCLA_FAR_SHADOW_INTERVAL");
-                Os.unsetenv("REX_MCLA_ENV_MAP_INTERVAL");
-                Os.unsetenv("REX_MCLA_REFLECTION_INTERVAL");
-                Log.i(TAG, "Graphics profile: console original");
-            } else {
-                // Balanced mobile (default): MSAA off (eliminates 2x EDRAM resolve bandwidth),
-                // half-rate cubemap & road reflections; far shadows stay every-frame to avoid flicker.
-                Os.unsetenv("REX_MCLA_PRESET");
-                Os.setenv("REX_MCLA_ANTI_ALIASING", "off", true);
-                Os.unsetenv("REX_MCLA_FAR_SHADOW_INTERVAL");
-                Os.setenv("REX_MCLA_ENV_MAP_INTERVAL", "2", true);
-                Os.setenv("REX_MCLA_REFLECTION_INTERVAL", "2", true);
-                Log.i(TAG, "Graphics profile: balanced mobile (MSAA off, 1/2 env+reflection passes)");
-            }
+            // Clear any legacy launcher overrides so mcla.toml (in-game pause menu)
+            // and mobile defaults in ApplyPcDefaults() govern rendering cleanly.
+            Os.unsetenv("REX_MCLA_PRESET");
+            Os.unsetenv("REX_MCLA_ANTI_ALIASING");
+            Os.unsetenv("REX_MCLA_FAR_SHADOW_INTERVAL");
+            Os.unsetenv("REX_MCLA_ENV_MAP_INTERVAL");
+            Os.unsetenv("REX_MCLA_REFLECTION_INTERVAL");
         } catch (Exception e) {
             Log.e(TAG, "Could not apply graphics environment", e);
         }
@@ -349,13 +304,13 @@ public final class MclaActivity extends SDLActivity {
                 // Turnip debug flags must never leak to system Vulkan or PanVK.
                 debug = null;
             } else if (debug == null) {
-                // Default to "" (no debug switch) so Turnip runs at full async speed
-                // instead of serializing every draw call with syncdraw.
+                // Default to syncdraw on Turnip: fixes wheel & headlight flickering
+                // on Snapdragon/Adreno Turnip drivers.
                 debug = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                        .getString("tu_debug_v2", "");
-                if (!debug.equals("syncdraw") && !debug.equals("noubwc") &&
+                        .getString("tu_debug_s23", "syncdraw");
+                if ("none".equals(debug) || (!debug.equals("syncdraw") && !debug.equals("noubwc") &&
                         !debug.equals("flushall") && !debug.equals("nolrz") &&
-                        !debug.equals("sysmem")) {
+                        !debug.equals("sysmem"))) {
                     debug = null;
                 }
             }

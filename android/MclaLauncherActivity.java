@@ -60,10 +60,9 @@ public final class MclaLauncherActivity extends Activity {
     private Button shaderImportButton;
     private Button audioButton;
     private Button fpsOverlayButton;
+    private Button sustainedPerfButton;
     private Button adaptiveQueueButton;
     private Spinner turnipDebugSpinner;
-    private Spinner resolutionSpinner;
-    private Spinner graphicsProfileSpinner;
     private TextView driverStatus;
     private TextView shaderStatus;
     private ProgressBar progress;
@@ -168,7 +167,7 @@ public final class MclaLauncherActivity extends Activity {
         addAction(gameCard, pickButton, false);
 
         LinearLayout graphicsCard = card(layout, "02  Graphics",
-                "Configure Vulkan driver, hardware DPU scaling, and rendering profile.");
+                "Choose a Vulkan driver; tune detail options in the in-game pause menu.");
 
         driverStatus = new TextView(this);
         driverStatus.setTextColor(0xFF70DFCA);
@@ -200,86 +199,26 @@ public final class MclaLauncherActivity extends Activity {
         addAction(graphicsCard, systemButton, false);
 
         {
-            TextView resLabel = label("Display resolution (Snapdragon hardware DPU scaler)",
-                    13, 0xFFA8B9C4, false);
-            LinearLayout.LayoutParams resLabelParams = new LinearLayout.LayoutParams(-1, -2);
-            resLabelParams.topMargin = dp(12);
-            graphicsCard.addView(resLabel, resLabelParams);
-            final String[] resOptions = {
-                "720p (recommended · matches 360 target, sharp UI)",
-                "900p (balanced · hardware scaler)",
-                "Native panel (full screen · higher GPU load)"
-            };
-            final int[] resHeights = {720, 900, 0};
-            resolutionSpinner = new Spinner(this);
-            resolutionSpinner.setAdapter(new ArrayAdapter<>(this,
-                    android.R.layout.simple_spinner_dropdown_item, resOptions));
-            int currentHeight = getSharedPreferences("graphics", MODE_PRIVATE)
-                    .getInt("surface_height", 720);
-            int resSelected = currentHeight == 900 ? 1 : (currentHeight <= 0 ? 2 : 0);
-            resolutionSpinner.setSelection(resSelected);
-            resolutionSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
-                @Override
-                public void onItemSelected(android.widget.AdapterView<?> parent,
-                        View view, int position, long id) {
-                    int h = (position >= 0 && position < resHeights.length) ? resHeights[position] : 720;
-                    getSharedPreferences("graphics", MODE_PRIVATE).edit()
-                            .putInt("surface_height", h).apply();
-                }
-                @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
-            });
-            LinearLayout.LayoutParams resSpinnerParams = new LinearLayout.LayoutParams(-1, -2);
-            resSpinnerParams.topMargin = dp(6);
-            graphicsCard.addView(resolutionSpinner, resSpinnerParams);
-        }
-
-        {
-            TextView profileLabel = label("Graphics profile (MSAA & reflection pass rate)",
-                    13, 0xFFA8B9C4, false);
-            LinearLayout.LayoutParams profileLabelParams = new LinearLayout.LayoutParams(-1, -2);
-            profileLabelParams.topMargin = dp(10);
-            graphicsCard.addView(profileLabel, profileLabelParams);
-            final String[] profileOptions = {
-                "Balanced mobile (recommended · MSAA off, 1/2 reflections)",
-                "Console original (2x MSAA, full-rate passes)",
-                "Maximum FPS (low preset · 1/4 reflections)"
-            };
-            graphicsProfileSpinner = new Spinner(this);
-            graphicsProfileSpinner.setAdapter(new ArrayAdapter<>(this,
-                    android.R.layout.simple_spinner_dropdown_item, profileOptions));
-            int currentProfile = getSharedPreferences("graphics", MODE_PRIVATE)
-                    .getInt("profile", 0);
-            if (currentProfile < 0 || currentProfile >= profileOptions.length) currentProfile = 0;
-            graphicsProfileSpinner.setSelection(currentProfile);
-            graphicsProfileSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
-                @Override
-                public void onItemSelected(android.widget.AdapterView<?> parent,
-                        View view, int position, long id) {
-                    getSharedPreferences("graphics", MODE_PRIVATE).edit()
-                            .putInt("profile", position).apply();
-                }
-                @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
-            });
-            LinearLayout.LayoutParams profileSpinnerParams = new LinearLayout.LayoutParams(-1, -2);
-            profileSpinnerParams.topMargin = dp(6);
-            graphicsCard.addView(graphicsProfileSpinner, profileSpinnerParams);
-        }
-
-        {
-            TextView debugLabel = label("Turnip debug (leave on No switch for full GPU speed)",
+            TextView debugLabel = label("Turnip synchronization (syncdraw fixes flickering wheels & headlights)",
                     13, 0xFFA8B9C4, false);
             LinearLayout.LayoutParams debugLabelParams = new LinearLayout.LayoutParams(-1, -2);
             debugLabelParams.topMargin = dp(10);
             graphicsCard.addView(debugLabel, debugLabelParams);
-            final String[] options = {"No switch (recommended · full speed)",
-                    "syncdraw (slow debug only)", "noubwc", "flushall", "nolrz", "sysmem"};
+            final String[] options = {
+                "syncdraw (recommended · fixes wheel & light flicker)",
+                "No switch (experimental · may flicker on Turnip)",
+                "noubwc",
+                "flushall",
+                "nolrz",
+                "sysmem"
+            };
             turnipDebugSpinner = new Spinner(this);
             turnipDebugSpinner.setAdapter(new ArrayAdapter<>(this,
                     android.R.layout.simple_spinner_dropdown_item, options));
             String current = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                    .getString("tu_debug_v2", "");
+                    .getString("tu_debug_s23", "syncdraw");
             int selected = 0;
-            if ("syncdraw".equals(current)) {
+            if ("none".equals(current)) {
                 selected = 1;
             } else {
                 for (int i = 2; i < options.length; i++) {
@@ -291,10 +230,10 @@ public final class MclaLauncherActivity extends Activity {
                 @Override
                 public void onItemSelected(android.widget.AdapterView<?> parent,
                         View view, int position, long id) {
-                    String value = position == 0 ? "" :
-                            position == 1 ? "syncdraw" : options[position];
+                    String value = position == 0 ? "syncdraw" :
+                            position == 1 ? "none" : options[position];
                     getSharedPreferences("driver_debug", MODE_PRIVATE).edit()
-                            .putString("tu_debug_v2", value).apply();
+                            .putString("tu_debug_s23", value).apply();
                     updateDriverStatus();
                 }
                 @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
@@ -305,7 +244,7 @@ public final class MclaLauncherActivity extends Activity {
             updateDriverStatus();
         }
 
-        LinearLayout extrasCard = card(layout, "03  Extras", "Optional graphics assets, HUD, and touch layout.");
+        LinearLayout extrasCard = card(layout, "03  Extras", "Optional graphics assets, HUD, thermal stability, and touch layout.");
 
         shaderStatus = new TextView(this);
         shaderStatus.setTextColor(0xFFA8B9C4);
@@ -374,6 +313,16 @@ public final class MclaLauncherActivity extends Activity {
         addAction(extrasCard, fpsOverlayButton, false);
         updateFpsOverlayStatus();
 
+        sustainedPerfButton = new Button(this);
+        sustainedPerfButton.setOnClickListener(view -> {
+            boolean enabled = !sustainedPerfEnabled();
+            getSharedPreferences("graphics", MODE_PRIVATE).edit()
+                    .putBoolean("sustained_perf_s23", enabled).apply();
+            updateSustainedPerfStatus();
+        });
+        addAction(extrasCard, sustainedPerfButton, false);
+        updateSustainedPerfStatus();
+
         audioButton = new Button(this);
         audioButton.setOnClickListener(view -> {
             if (MclaBuildVariant.isRedMagicAudioTest(this)) return;
@@ -425,6 +374,11 @@ public final class MclaLauncherActivity extends Activity {
                 .getBoolean("fps_overlay", true);
     }
 
+    private boolean sustainedPerfEnabled() {
+        return getSharedPreferences("graphics", MODE_PRIVATE)
+                .getBoolean("sustained_perf_s23", true);
+    }
+
     private boolean shaderPackAuto() {
         return getSharedPreferences("redmagic_diagnostics", MODE_PRIVATE)
                 .getBoolean("shader_pack_auto", true);
@@ -440,6 +394,13 @@ public final class MclaLauncherActivity extends Activity {
         fpsOverlayButton.setText(fpsOverlayEnabled()
                 ? "FPS counter: ON (native HUD · zero Vulkan cost)"
                 : "FPS counter: OFF");
+    }
+
+    private void updateSustainedPerfStatus() {
+        if (sustainedPerfButton == null) return;
+        sustainedPerfButton.setText(sustainedPerfEnabled()
+                ? "Sustained thermal mode: ON (recommended for S23)"
+                : "Sustained thermal mode: OFF (may overheat/throttle)");
     }
 
     private void updateAdaptiveQueueStatus() {
@@ -467,11 +428,12 @@ public final class MclaLauncherActivity extends Activity {
         String suffix = "";
         if (custom) {
             String debug = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                    .getString("tu_debug_v2", "");
+                    .getString("tu_debug_s23", "syncdraw");
             if (new File(getFilesDir(), "driver.env").isFile()) {
                 suffix = " (driver.env override)";
             } else {
-                suffix = debug.isEmpty() ? " (full speed · no debug switch)" : " (" + debug + ")";
+                suffix = ("none".equals(debug) || debug.isEmpty())
+                        ? " (no switch)" : " (" + debug + ")";
             }
         }
         driverStatus.setText(custom ? "Selected driver: " + driverLabel + suffix :

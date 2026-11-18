@@ -10,12 +10,12 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Android-ARM64-3DDC84?style=flat-square&amp;logo=android&amp;logoColor=white" alt="Android ARM64">
   <img src="https://img.shields.io/badge/Renderer-Vulkan-F0A35A?style=flat-square&amp;logo=vulkan&amp;logoColor=white" alt="Vulkan renderer">
-  <img src="https://img.shields.io/badge/Status-Early%20port-E9B77B?style=flat-square" alt="Early port">
+  <img src="https://img.shields.io/badge/Status-Active%20development-3DDC84?style=flat-square" alt="Active development">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--or--later-8995AA?style=flat-square" alt="GPL-3.0-or-later license"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/gabrielbskk/mcla-recomp-rv/releases/tag/stable-snap"><img src="https://img.shields.io/badge/Download-Android%20APK-F0A35A?style=for-the-badge&amp;logo=android&amp;logoColor=white" alt="Download Android APK"></a>
+  <a href="https://github.com/gabrielbskk/mcla-recomp-rv/releases"><img src="https://img.shields.io/badge/Download-Android%20APK-F0A35A?style=for-the-badge&amp;logo=android&amp;logoColor=white" alt="Download Android APK"></a>
   &nbsp;
   <a href="docs/android-testing.md"><img src="https://img.shields.io/badge/Read-Install%20guide-242B38?style=for-the-badge&amp;logo=readthedocs&amp;logoColor=white" alt="Read the installation guide"></a>
 </p>
@@ -24,6 +24,7 @@
   <a href="#compatibility">Compatibility</a> &nbsp; / &nbsp;
   <a href="#need-help">Support</a> &nbsp; / &nbsp;
   <a href="#documentation">Documentation</a> &nbsp; / &nbsp;
+  <a href="CHANGELOG.md">Changelog</a> &nbsp; / &nbsp;
   <a href="docs/android-build.md">Build from source</a>
 </p>
 
@@ -31,17 +32,22 @@
 
 ---
 
+> [!NOTE]
+> **Active development has resumed.** Ongoing work focuses on Snapdragon / Adreno
+> performance, Galaxy S23 thermal stability, and Vulkan / Turnip rendering fixes.
+> Track player-facing build changes in [CHANGELOG.md](CHANGELOG.md).
+
 > [!IMPORTANT]
 > **Early Android port — compatibility and performance vary.** You need your
 > own legally obtained Xbox 360 game files; they are not included.
 
 ## 01 · Snapdragon / Adreno build
 
-Download the APK from the [Snapdragon release](https://github.com/gabrielbskk/mcla-recomp-rv/releases/tag/stable-snap):
+Download the APK from [Releases](https://github.com/gabrielbskk/mcla-recomp-rv/releases):
 
 | APK | Intended device | Status |
 | --- | --- | --- |
-| **stable-snap.apk** · v0.1.45 | Snapdragon / Adreno | Maintainer reports good results on Galaxy S23; broader compatibility and controlled FPS are unverified. |
+| **v0.1.63** · normal | Snapdragon / Adreno | Full-screen presentation restored, Turnip `syncdraw` default restored (fixes wheel & headlight flicker), persistent Vulkan pipeline cache, native zero-Vulkan-cost FPS HUD, stereo audio, and Galaxy S23 thermal/GPU stability fixes. |
 
 **Mali support has been discontinued.** The diagnostic APK has been withdrawn;
 Mali/Immortalis and PanVK are outside this project's supported scope. Tested

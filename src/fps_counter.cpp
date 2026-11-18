@@ -8,9 +8,7 @@
 #include <mutex>
 
 #ifdef __ANDROID__
-#include <dlfcn.h>
 #include <jni.h>
-#include <unistd.h>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -18,7 +16,6 @@
 #include <rex/system/interfaces/graphics.h>
 #include <rex/ui/presenter.h>
 
-REXCVAR_DECLARE(int32_t, mcla_fps);
 REXCVAR_DECLARE(bool, mcla_fps_overlay);
 REXCVAR_DECLARE(bool, mcla_fps_log);
 #endif
@@ -65,60 +62,6 @@ GameUpdateStats ComputeStatsLocked(uint64_t now) {
 }
 
 #ifdef __ANDROID__
-struct AdpfHintState {
-  using Manager = void;
-  using Session = void;
-  using GetManagerFn = Manager* (*)();
-  using CreateSessionFn = Session* (*)(Manager*, const int32_t*, size_t, int64_t);
-  using UpdateTargetFn = int (*)(Session*, int64_t);
-  using ReportActualFn = int (*)(Session*, int64_t);
-
-  Session* session = nullptr;
-  UpdateTargetFn update_target = nullptr;
-  ReportActualFn report_actual = nullptr;
-  int64_t target_ns = 0;
-  uint64_t prev_tick_ns = 0;
-
-  AdpfHintState() {
-    auto get_mgr = reinterpret_cast<GetManagerFn>(
-        dlsym(RTLD_DEFAULT, "APerformanceHint_getManager"));
-    auto create_sess = reinterpret_cast<CreateSessionFn>(
-        dlsym(RTLD_DEFAULT, "APerformanceHint_createSession"));
-    update_target = reinterpret_cast<UpdateTargetFn>(
-        dlsym(RTLD_DEFAULT, "APerformanceHint_updateTargetWorkDuration"));
-    report_actual = reinterpret_cast<ReportActualFn>(
-        dlsym(RTLD_DEFAULT, "APerformanceHint_reportActualWorkDuration"));
-    if (!get_mgr || !create_sess || !report_actual) return;
-    Manager* mgr = get_mgr();
-    if (!mgr) return;
-    const int32_t tid = static_cast<int32_t>(gettid());
-    const int32_t cap = REXCVAR_GET(mcla_fps);
-    target_ns = cap > 0 ? (1'000'000'000LL / cap) : 16'666'667LL;
-    session = create_sess(mgr, &tid, 1, target_ns);
-    if (session) {
-      REXLOG_INFO("ADPF: performance hint session active for guest main thread tid={} (target={} ns)",
-                  tid, target_ns);
-    }
-  }
-
-  void ReportTick(uint64_t now_ns) {
-    if (!session || !report_actual) return;
-    const int32_t cap = REXCVAR_GET(mcla_fps);
-    const int64_t desired_ns = cap > 0 ? (1'000'000'000LL / cap) : 16'666'667LL;
-    if (desired_ns != target_ns && update_target) {
-      target_ns = desired_ns;
-      update_target(session, target_ns);
-    }
-    if (prev_tick_ns != 0 && now_ns > prev_tick_ns) {
-      const uint64_t delta_ns = now_ns - prev_tick_ns;
-      if (delta_ns <= 250'000'000ULL) {
-        report_actual(session, static_cast<int64_t>(delta_ns));
-      }
-    }
-    prev_tick_ns = now_ns;
-  }
-};
-
 uint64_t last_sampled_ns = 0;
 uint64_t last_logged_ns = 0;
 char hud_text[96] = "Game updates --";
@@ -187,8 +130,6 @@ void RecordGameUpdate() {
   }
   MclaTickVideoBorders();
 #ifdef __ANDROID__
-  static thread_local AdpfHintState adpf;
-  adpf.ReportTick(now);
   if (should_sample) {
     SampleAndroidPerf(now, stats);
   }
