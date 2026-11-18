@@ -162,7 +162,7 @@ final class MclaLogExporter {
 
         boolean customDriver = new File(context.getFilesDir(), "gpu-drivers/selected.txt").isFile();
         String tuDebug = context.getSharedPreferences("driver_debug", Context.MODE_PRIVATE)
-                .getString("tu_debug_s23", "syncdraw");
+                .getString("tu_debug", "syncdraw");
         String perfPreset = MclaRuntimeProfiles.perfPreset(context);
         String audioProfile = MclaRuntimeProfiles.audioProfile(context);
         boolean emptyStreets = MclaRuntimeProfiles.emptyStreets(context);

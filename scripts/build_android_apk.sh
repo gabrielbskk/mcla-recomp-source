@@ -181,17 +181,17 @@ fi
 zipalign -P 16 -f 4 "$OUT/stage/apk/base.apk" "$OUT/stage/MCLA-aligned.apk"
 apksigner sign --ks "$KEYSTORE_PATH" --ks-key-alias "$KEY_ALIAS" \
     --ks-pass "pass:$KEYSTORE_PASSWORD" --key-pass "pass:$KEY_PASSWORD" \
-    --out "$OUT/MCLA-arm64.apk" "$OUT/stage/MCLA-aligned.apk"
-apksigner verify "$OUT/MCLA-arm64.apk"
-zipalign -c -P 16 4 "$OUT/MCLA-arm64.apk"
+    --out "$OUT/Midnight-Recomp.apk" "$OUT/stage/MCLA-aligned.apk"
+apksigner verify "$OUT/Midnight-Recomp.apk"
+zipalign -c -P 16 4 "$OUT/Midnight-Recomp.apk"
 if [ "$WRITE_VERSION_STATE" = true ]; then
     printf '%s\n' "$VERSION_CODE" > "$VERSION_STATE_FILE"
 fi
 echo "Version: $VERSION_NAME (code $VERSION_CODE)"
 echo "Keystore: $KEYSTORE_PATH"
-echo "APK: $OUT/MCLA-arm64.apk"
+echo "APK: $OUT/Midnight-Recomp.apk"
 DOWNLOADS_DIR=${MCLA_DOWNLOADS_DIR:-/storage/emulated/0/Download}
 if [ -d "$DOWNLOADS_DIR" ]; then
-    cp "$OUT/MCLA-arm64.apk" "$DOWNLOADS_DIR/MCLA-Recomp-arm64.apk"
-    echo "Download APK: $DOWNLOADS_DIR/MCLA-Recomp-arm64.apk"
+    cp "$OUT/Midnight-Recomp.apk" "$DOWNLOADS_DIR/Midnight-Recomp.apk"
+    echo "Download APK: $DOWNLOADS_DIR/Midnight-Recomp.apk"
 fi

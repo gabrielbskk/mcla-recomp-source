@@ -1091,46 +1091,60 @@ void MclaApp::ApplyPcDefaults() {
       {"edram_tiles", "4096"},
       {"render_target_max_height", "1024"},
 #if REX_PLATFORM_ANDROID
-      {"render_target_trim_seconds", "20"},
-      {"gpu_memory_pressure_percent", "80"},
-#else
-      {"render_target_trim_seconds", "60"},
-      {"gpu_memory_pressure_percent", "90"},
-      {"anisotropic_override", "5"},
-#endif
-#if REX_PLATFORM_ANDROID
-      // Default mobile GPUs to trilinear/bilinear filtering and MSAA off to save
-      // LPDDR5X and TMU bandwidth while letting any user choice in mcla.toml win.
+      // --- Android / Snapdragon mobile defaults ---
+      // Aggressive VRAM management: trim idle render targets after 15 s instead
+      // of 60 s desktop default, and start freeing at 75 % GPU memory usage.
+      {"render_target_trim_seconds", "15"},
+      {"gpu_memory_pressure_percent", "75"},
+      // Mobile GPUs: disable anisotropic filtering and MSAA to save LPDDR5X
+      // bandwidth and TMU power.  User choice in mcla.toml still wins.
       {"anisotropic_override", "0"},
       {"mcla_anti_aliasing", "off"},
-      // Keep the driver pipeline cache across launches on Android. The shader
-      // description storage alone still recreates every VkPipeline each run.
+      // Force off the game-side 4× MSAA EDRAM pass that persists even after
+      // mcla_anti_aliasing = off (halves tile-pass overhead on Adreno).
+      {"mcla_msaa", "false"},
+      // Persist the Vulkan driver's internal pipeline cache to disk across
+      // launches.  Without this, every VkPipeline is compiled from scratch
+      // each session, causing severe stutter during the first minutes.
       {"vulkan_pipeline_cache_file", "true"},
-      // With async pipeline creation, a frame that used a pipeline still being
-      // created is not presented: the last picture stays up, for up to
-      // vulkan_async_skip_incomplete_frames_max_ms (100 ms by default). At the
-      // 30 FPS cap the game runs at, 100 ms holds one picture for three frame
-      // intervals, which is most visible while a car loads and its new
-      // pipelines are compiled. One interval plus a little keeps the hold to a
-      // single frame; the object appears as soon as its pipeline is ready.
+      // Skip incomplete async pipeline frames for at most 1 frame interval at
+      // 30 FPS, so new car/object pipelines appear as soon as they're ready.
       {"vulkan_async_skip_incomplete_frames_max_ms", "40"},
-      // Keep the guest video mode at 720 lines while VulkanPresenter scales to
-      // the full native panel. On the tested Galaxy S23, the experimental
-      // 644-line mode repeatedly faulted during loading.
+      // Keep the guest at 720p; the VulkanPresenter scales to native panel.
       {"mcla_render_height", "720"},
-      // Output 2-channel stereo on Android (compatible with AAudio FastTrack on
-      // Galaxy S23 and spatial audio on RedMagic, 3x less SDL sample bandwidth),
-      // raise Audio Worker + XMA Decoder + guest Mixer scheduling priority, and
-      // use an adaptive 16..28 frame queue (85..149 ms) to absorb shader stalls.
+      // 2-channel stereo output (saves 3× SDL sample bandwidth), elevated
+      // audio thread priority, and adaptive queue to absorb shader stalls.
       {"audio_android_force_stereo", "true"},
       {"audio_client_lock", "true"},
       {"audio_maxqframes", "16"},
       {"audio_adaptive_queue", "true"},
       {"audio_adaptive_queue_max", "28"},
-      {"audio_thread_priority", "1"},
-      {"audio_mixer_priority", "1"},
-      // Skip Windows-only HDR render-marker scans on Android.
+      // Priority 2 → nice −16, strong enough to hold the Audio Worker and
+      // XMA Decoder above GPU-bound threads during shader stalls.
+      {"audio_thread_priority", "2"},
+      {"audio_mixer_priority", "2"},
+      // Skip Windows-only HDR render-marker scans.
       {"mcla_render_markers", "false"},
+      // Use 256 KiB write-watch pages on Android to reduce mprotect/SIGSEGV
+      // overhead from the 4 KiB desktop default.  Larger pages mean fewer
+      // faults but more data uploaded per fault; 256 KiB balances well on
+      // ARM64 where the kernel page granularity is 4 KiB or 16 KiB.
+      {"shared_memory_invalidation_pages_log2", "6"},
+      // Direct unscaled texture loads avoid an extra staging copy for 2-D
+      // EDRAM-resolved textures that don't need resolution scaling.
+      {"texture_load_direct_unscaled", "true"},
+      // CPU scheduling: wake the pump thread on demand, use polling waits,
+      // and sleep 50 µs on fence spins to reduce power draw on mobile.
+      {"mcla_pump_wake_on_demand", "true"},
+      {"mcla_poll_wait", "true"},
+      {"mcla_fence_sleep_us", "50"},
+#else
+      {"render_target_trim_seconds", "60"},
+      {"gpu_memory_pressure_percent", "90"},
+      {"anisotropic_override", "5"},
+      {"vulkan_pipeline_cache_file", "true"},
+      {"vulkan_async_skip_incomplete_frames_max_ms", "40"},
+      {"mcla_render_height", "720"},
 #endif
 #if REX_PLATFORM_WIN32
       {"d3d12_hoist_shared_memory_uploads", "true"},

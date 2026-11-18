@@ -278,7 +278,7 @@ public final class MclaActivity extends SDLActivity {
                 // Default to syncdraw on Turnip: fixes wheel & headlight flickering
                 // on Snapdragon/Adreno Turnip drivers.
                 debug = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                        .getString("tu_debug_s23", "syncdraw");
+                        .getString("tu_debug", "syncdraw");
                 if ("none".equals(debug) || (!debug.equals("syncdraw") && !debug.equals("noubwc") &&
                         !debug.equals("flushall") && !debug.equals("nolrz") &&
                         !debug.equals("sysmem"))) {

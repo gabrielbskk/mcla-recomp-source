@@ -298,18 +298,18 @@ public final class MclaLauncherActivity extends Activity {
         // 01 · PERFORMANCE & WORLD (SNAPDRAGON / S23)
         // ====================================================================
         LinearLayout perfCard = sectionCard(layout,
-                "01 · SNAPDRAGON PERFORMANCE",
+                "01 · PERFORMANCE PROFILES",
                 "Graphics & World Density",
-                "Optimized presets for Galaxy S23 (Adreno 740), Turnip syncdraw, and 8 GB+ devices.");
+                "Optimized presets for Snapdragon / Adreno Turnip syncdraw and 8 GB+ devices.");
 
         perfCard.addView(label("Performance Preset", 12.5f, TEXT_MUTED, true));
         final String[] perfLabels = {
-            "S23 Balanced (Recommended · High FPS + Clean Cars)",
+            "Balanced (Recommended · High FPS + Clean Cars)",
             "Max FPS / Low Draw-Call (Best for Heavy Turnip syncdraw)",
             "Console Visuals (Original Xbox 360 Shadows & Blur)"
         };
         final String[] perfValues = {
-            MclaRuntimeProfiles.PERF_S23_BALANCED,
+            MclaRuntimeProfiles.PERF_BALANCED,
             MclaRuntimeProfiles.PERF_MAX_FPS,
             MclaRuntimeProfiles.PERF_CONSOLE
         };
@@ -457,7 +457,7 @@ public final class MclaLauncherActivity extends Activity {
         };
         turnipDebugSpinner = createDarkSpinner(tuOptions);
         String currentTu = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                .getString("tu_debug_s23", "syncdraw");
+                .getString("tu_debug", "syncdraw");
         int selectedTu = 0;
         if ("none".equals(currentTu)) {
             selectedTu = 1;
@@ -471,7 +471,7 @@ public final class MclaLauncherActivity extends Activity {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
                 String value = pos == 0 ? "syncdraw" : pos == 1 ? "none" : tuOptions[pos];
                 getSharedPreferences("driver_debug", MODE_PRIVATE).edit()
-                        .putString("tu_debug_s23", value).apply();
+                        .putString("tu_debug", value).apply();
                 updateDriverStatus();
                 refreshHeroSummary();
             }
@@ -491,13 +491,13 @@ public final class MclaLauncherActivity extends Activity {
                 "Lock-free 2ch SDL callback + elevated host Audio Worker / XMA Decoder thread priority to prevent audio dropouts.");
 
         final String[] audioLabels = {
-            "S23 Adaptive Anti-Cut (16–28 frames · Default)",
-            "RedMagic 11 Air / 8 Elite Safe (20–32 frames · 1024 buf)",
+            "Adaptive Anti-Cut (16–28 frames · Recommended)",
+            "Safe / Anti-Cut (20–32 frames · 1024 buf)",
             "Low-Latency Fast Path (12–24 frames)"
         };
         final String[] audioValues = {
-            MclaRuntimeProfiles.AUDIO_S23_ADAPTIVE,
-            MclaRuntimeProfiles.AUDIO_REDMAGIC_SAFE,
+            MclaRuntimeProfiles.AUDIO_ADAPTIVE,
+            MclaRuntimeProfiles.AUDIO_SAFE,
             MclaRuntimeProfiles.AUDIO_LOW_LATENCY
         };
         Spinner audioSpinner = createDarkSpinner(audioLabels);
@@ -628,13 +628,13 @@ public final class MclaLauncherActivity extends Activity {
         if (heroSummaryChip == null) return;
         boolean custom = new File(driverFolder(), "selected.txt").isFile();
         String tu = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                .getString("tu_debug_s23", "syncdraw");
+                .getString("tu_debug", "syncdraw");
         String drv = custom ? ("Turnip · " + ("none".equals(tu) ? "nosync" : tu)) : "System Vulkan";
         String perf = MclaRuntimeProfiles.perfPreset(this);
         String perfShort = MclaRuntimeProfiles.PERF_MAX_FPS.equals(perf) ? "Max FPS"
-                : MclaRuntimeProfiles.PERF_CONSOLE.equals(perf) ? "Console" : "S23 Balanced";
+                : MclaRuntimeProfiles.PERF_CONSOLE.equals(perf) ? "Console" : "Balanced";
         String audio = MclaRuntimeProfiles.audioProfile(this);
-        String audioShort = MclaRuntimeProfiles.AUDIO_REDMAGIC_SAFE.equals(audio) ? "RedMagic Safe"
+        String audioShort = MclaRuntimeProfiles.AUDIO_SAFE.equals(audio) ? "Safe"
                 : MclaRuntimeProfiles.AUDIO_LOW_LATENCY.equals(audio) ? "Low-Latency" : "Adaptive Stereo";
         heroSummaryChip.setText(drv + "   •   " + perfShort
                 + (MclaRuntimeProfiles.emptyStreets(this) ? " (Empty Streets)" : "")
@@ -687,7 +687,7 @@ public final class MclaLauncherActivity extends Activity {
         String suffix = "";
         if (custom) {
             String debug = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                    .getString("tu_debug_s23", "syncdraw");
+                    .getString("tu_debug", "syncdraw");
             if (new File(getFilesDir(), "driver.env").isFile()) {
                 suffix = " · driver.env override";
             } else {
