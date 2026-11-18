@@ -52,19 +52,25 @@ VERSION_NAME=${MCLA_VERSION_NAME:-0.1.$VERSION_CODE}
 if [ ! -f "$PLATFORM" ] || [ ! -f "$D8" ]; then
     mkdir -p "$SDK"
     python3 - "$SDK" <<'PY'
-import pathlib, sys, urllib.request, zipfile
+import hashlib, pathlib, sys, urllib.request, zipfile
 root = pathlib.Path(sys.argv[1])
 downloads = [
     ("platform-35.zip", "https://dl.google.com/android/repository/platform-35_r02.zip",
+     "0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0",
      ("android-35/android.jar", "android-35/core-for-system-modules.jar")),
     ("build-tools-35.zip", "https://dl.google.com/android/repository/build-tools_r35.0.1_linux.zip",
+     "5993499f3229a021b89f87088c57242aeefaa62316bf3d69da7de40bfd5350f1",
      ("android-15/lib/d8.jar",)),
 ]
-for archive_name, url, members in downloads:
+for archive_name, url, expected_sha256, members in downloads:
     archive = root / archive_name
     if not archive.exists():
         print(f"Downloading {url}", flush=True)
         urllib.request.urlretrieve(url, archive)
+    actual_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if actual_sha256 != expected_sha256:
+        archive.unlink(missing_ok=True)
+        raise SystemExit(f"SHA-256 mismatch for {archive_name}: got {actual_sha256}, expected {expected_sha256}")
     with zipfile.ZipFile(archive) as zf:
         for member in members:
             zf.extract(member, root)

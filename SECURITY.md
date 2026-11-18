@@ -2,15 +2,18 @@
 
 ## Reporting a vulnerability
 
-Please use [GitHub's private vulnerability reporting](https://github.com/gabrielbskk/mcla-recomp-rv/security/advisories/new)
-for security issues, such as unsafe file import, malicious driver handling, or
-exposure of private files. Include affected versions, reproduction steps and
-impact; do not post working exploits, credentials, game files or private logs
-in a public issue. There is no guaranteed response or fix timeline.
+Please use GitHub's private vulnerability reporting on either
+[mcla-recomp-source](https://github.com/gabrielbskk/mcla-recomp-source/security/advisories/new)
+or [mcla-recomp-rv](https://github.com/gabrielbskk/mcla-recomp-rv/security/advisories/new)
+for security issues, such as unsafe file import, malicious driver handling,
+CI/workflow weaknesses, or exposure of private files. Include affected versions,
+reproduction steps and impact; do not post working exploits, credentials, game
+files or private logs publicly. There is no guaranteed response or fix timeline.
 
-For ordinary crashes, compatibility and performance reports, open a
-[public issue](https://github.com/gabrielbskk/mcla-recomp-rv/issues), after
-removing personal information from logs and screenshots.
+Issues are disabled on `mcla-recomp-source`. For ordinary crashes, compatibility
+and performance reports, open a
+[public issue on `mcla-recomp-rv`](https://github.com/gabrielbskk/mcla-recomp-rv/issues)
+after removing personal information from logs and screenshots.
 
 ## Scope and practical precautions
 

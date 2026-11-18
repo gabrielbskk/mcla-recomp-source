@@ -94,8 +94,8 @@ for path_name in tracked:
 
 for workflow in sorted((root / ".github" / "workflows").glob("*.yml")):
     text = workflow.read_text(encoding="utf-8")
-    for match in re.finditer(r"^\s*-?\s*uses:\s*(\S+)", text, re.M):
-        reference = match.group(1)
+    uses_refs = [m.group(1) for m in re.finditer(r"^\s*-?\s*uses:\s*(\S+)", text, re.M)]
+    for reference in uses_refs:
         if not reference.startswith("./") and not re.fullmatch(
             r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}", reference
         ):
@@ -105,7 +105,10 @@ for workflow in sorted((root / ".github" / "workflows").glob("*.yml")):
     if not re.search(r"^permissions:\s*\n\s+contents:\s*read\s*$", text, re.M):
         errors.append(f"{workflow.name}: top-level permissions are not contents: read")
     if re.search(r"secrets\.(?!GITHUB_TOKEN)", text):
-        errors.append(f"{workflow.name}: uses a secret other than GITHUB_TOKEN")
+        if uses_refs:
+            errors.append(f"{workflow.name}: workflows using custom secrets must not invoke external uses: actions")
+        if re.search(r"^\s*(?:pull_request|pull_request_target|issue_comment|workflow_run)\s*:", text, re.M):
+            errors.append(f"{workflow.name}: workflows using custom secrets must not run on untrusted PR/issue events")
 
 checked_python = 0
 for path_name in tracked:

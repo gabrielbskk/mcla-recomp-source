@@ -43,10 +43,10 @@
 ---
 
 > [!NOTE]
-> **Active source repository (`v0.1.64` Experimental).** Contains the Android Java launcher/HUD (`android/`), C++23 host hooks (`src/`), ordered ReXGlue SDK patch series (`patches/`), and reproducible Termux / NDK r30 build scripts (`scripts/`). No game binaries, extracted assets, generated guest C++, or signing keys are tracked in Git.
+> **Public source repository (`v0.1.64` Experimental).** Contains the Android Java launcher/HUD (`android/`), C++23 host hooks (`src/`), ordered ReXGlue SDK patch series (`patches/`), and reproducible Termux / NDK r30 build scripts (`scripts/`). **GitHub Issues are disabled here** — open all bug reports, device logs, and player feedback in [**gabrielbskk/mcla-recomp-rv/issues**](https://github.com/gabrielbskk/mcla-recomp-rv/issues), and report security vulnerabilities privately via [SECURITY.md](SECURITY.md).
 
 > [!IMPORTANT]
-> **Legally obtained Xbox 360 game files are required** both to run `rexglue codegen` during native compilation and to import into app-private storage on Android.
+> **Legally obtained Xbox 360 game files are required** both to run `rexglue codegen` during native compilation and to import into app-private storage on Android. No game binaries, extracted assets, generated guest C++, or signing keys are tracked in Git.
 
 <a id="architecture"></a>
 ## 01 · `v0.1.64` Engineering Highlights *(Experimental)*

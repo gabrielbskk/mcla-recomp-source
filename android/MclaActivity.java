@@ -122,14 +122,28 @@ public final class MclaActivity extends SDLActivity {
                 || target.length() != source.length()
                 || target.lastModified() < source.lastModified();
         if (needsPluginCopy) {
-            try (FileInputStream input = new FileInputStream(source);
-                 FileOutputStream output = new FileOutputStream(target)) {
-                byte[] buffer = new byte[64 * 1024];
-                int count;
-                while ((count = input.read(buffer)) != -1) {
-                    output.write(buffer, 0, count);
+            File part = new File(getFilesDir(), "librexgpu-xenos.so.partial");
+            try {
+                try (FileInputStream input = new FileInputStream(source);
+                     FileOutputStream output = new FileOutputStream(part)) {
+                    byte[] buffer = new byte[64 * 1024];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        output.write(buffer, 0, count);
+                    }
+                    output.getFD().sync();
                 }
+                if (!part.renameTo(target)) {
+                    throw new java.io.IOException("Could not rename staged Xenos plugin");
+                }
+                target.setReadable(false, false);
+                target.setWritable(false, false);
+                target.setExecutable(false, false);
+                target.setReadable(true, true);
+                target.setWritable(true, true);
+                target.setExecutable(true, true);
             } catch (Exception e) {
+                part.delete();
                 Log.e(TAG, "Could not stage the Xenos Vulkan plugin", e);
             }
         }

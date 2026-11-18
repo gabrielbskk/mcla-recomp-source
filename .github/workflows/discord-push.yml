@@ -1,19 +1,54 @@
 name: Discord Push
+
 on:
   push:
     branches: [main, master]
 
+permissions:
+  contents: read
+
 jobs:
   notify:
-    runs-on: ubuntu-latest
+    if: github.repository == 'gabrielbskk/mcla-recomp-source'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Post to Discord
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_PUSHES }}
-          title: "📝 Push em ${{ github.ref_name }}"
-          description: "${{ github.event.head_commit.message }}"
-          color: 3447003
-          fields: '[{"name": "Autor", "value": "${{ github.actor }}", "inline": true}, {"name": "Commits", "value": "${{ github.event.commits.length }}", "inline": true}, {"name": "🔗 Ver diff", "value": "[GitHub](${{ github.event.compare }})", "inline": true}]'
-          username: "GitHub Source"
-          avatar_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_PUSHES }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_COUNT: ${{ github.event.commits.length }}
+          COMPARE_URL: ${{ github.event.compare }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK}" ]; then
+            echo "DISCORD_WEBHOOK_PUSHES is not configured; skipping notification."
+            exit 0
+          fi
+          payload="$(jq -n \
+            --arg title "📝 Push em ${REF_NAME}" \
+            --arg desc "${COMMIT_MSG:0:3500}" \
+            --arg actor "${ACTOR}" \
+            --arg count "${COMMIT_COUNT:-1}" \
+            --arg compare "[GitHub](${COMPARE_URL})" \
+            '{
+              username: "GitHub Source",
+              avatar_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+              allowed_mentions: { parse: [] },
+              embeds: [{
+                title: $title,
+                description: (if ($desc | length) > 0 then $desc else "Sem mensagem" end),
+                color: 3447003,
+                fields: [
+                  { name: "Autor", value: $actor, inline: true },
+                  { name: "Commits", value: $count, inline: true },
+                  { name: "🔗 Ver diff", value: $compare, inline: true }
+                ]
+              }]
+            }')"
+          curl --fail-with-body --silent --show-error --max-time 15 \
+            -H "Content-Type: application/json" \
+            -d "${payload}" \
+            "${DISCORD_WEBHOOK}" >/dev/null

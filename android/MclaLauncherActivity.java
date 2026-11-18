@@ -901,10 +901,14 @@ public final class MclaLauncherActivity extends Activity {
                 if (raw == null) throw new Exception("Could not open the ZIP.");
                 try (ZipInputStream zip = new ZipInputStream(raw)) {
                     ZipEntry entry;
+                    int entriesSeen = 0;
                     while ((entry = zip.getNextEntry()) != null) {
+                        if (++entriesSeen > 512)
+                            throw new Exception("The ZIP contains too many entries.");
                         String name = entry.getName();
-                        if (entry.isDirectory() || name == null ||
-                                !(name.equals(driverName) || name.endsWith("/" + driverName))) continue;
+                        if (entry.isDirectory() || name == null
+                                || name.startsWith("/") || name.contains("..") || name.contains("\\")
+                                || !(name.equals(driverName) || name.endsWith("/" + driverName))) continue;
                         if (found) throw new Exception("The ZIP contains more than one driver.");
                         found = true;
                         long copied = 0;
@@ -925,6 +929,12 @@ public final class MclaLauncherActivity extends Activity {
             if (!found) throw new Exception("The ZIP does not contain " + driverName + ".");
             validateArm64Library(part);
             if (!part.renameTo(target)) throw new Exception("Could not save the driver.");
+            target.setReadable(false, false);
+            target.setWritable(false, false);
+            target.setExecutable(false, false);
+            target.setReadable(true, true);
+            target.setWritable(true, true);
+            target.setExecutable(true, true);
             File selection = new File(folder, "selected.txt");
             try (FileOutputStream output = new FileOutputStream(selection)) {
                 output.write((driverName + "\n").getBytes("UTF-8"));

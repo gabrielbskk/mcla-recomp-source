@@ -20,7 +20,7 @@
 /shaderpack/
 *.shaderpack
 
-# Keys
+# Keys & local environment / runtime configuration
 *.key
 *.keystore
 *.jks
@@ -28,6 +28,10 @@
 *.pfx
 *.pem
 keys.*
+.env
+.env.*
+/mcla_manifest.toml
+/mcla.toml
 
 # Build output
 /build/
