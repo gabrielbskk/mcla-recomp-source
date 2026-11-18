@@ -10,6 +10,7 @@
     <application
         android:label="MCLA Recomp"
         android:appCategory="game"
+        android:isGame="true"
         android:allowBackup="false"
         android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
         android:hardwareAccelerated="true">

@@ -10,12 +10,20 @@ import android.os.Handler;
 import android.os.Looper;
 import android.system.Os;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.input.InputManager;
+import android.util.DisplayMetrics;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.InputDevice;
+import android.view.SurfaceHolder;
 import android.view.View;
 import android.widget.RelativeLayout;
+import android.widget.TextView;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
@@ -28,7 +36,13 @@ import java.io.FileReader;
 
 public final class MclaActivity extends SDLActivity {
     private static final String TAG = "MCLA";
+    private static native String nativePollPerfOverlay();
+
     private MclaTouchControls touchControls;
+    private TextView fpsOverlayView;
+    private String lastPerfText = "";
+    private boolean fpsOverlayEnabled = true;
+    private boolean activityResumed = false;
     private InputManager inputManager;
     private AudioManager audioManager;
     private AudioFocusRequest audioFocusRequest;
@@ -40,6 +54,10 @@ public final class MclaActivity extends SDLActivity {
                 @Override public void onInputDeviceRemoved(int id) { updateGamepad(); }
                 @Override public void onInputDeviceChanged(int id) { updateGamepad(); }
             };
+
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
 
     private void updateGamepad() {
         if (touchControls == null) return;
@@ -60,11 +78,27 @@ public final class MclaActivity extends SDLActivity {
         }
         touchControls.setGamepadConnected(connected);
     }
-    private final Handler logHandler = new Handler(Looper.getMainLooper());
-    private final Runnable exportLogs = new Runnable() {
+
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final Runnable perfOverlayTick = new Runnable() {
         @Override public void run() {
-            MclaLogExporter.exportAsync(MclaActivity.this);
-            logHandler.postDelayed(this, 60_000);
+            if (!activityResumed || !fpsOverlayEnabled || fpsOverlayView == null) return;
+            String sample = null;
+            try {
+                sample = nativePollPerfOverlay();
+            } catch (UnsatisfiedLinkError ignored) {
+                // Native library may still be finishing startup.
+            }
+            if (sample != null && !sample.isEmpty()) {
+                if (fpsOverlayView.getVisibility() != View.VISIBLE) {
+                    fpsOverlayView.setVisibility(View.VISIBLE);
+                }
+                if (!sample.equals(lastPerfText)) {
+                    lastPerfText = sample;
+                    fpsOverlayView.setText(sample);
+                }
+            }
+            uiHandler.postDelayed(this, 500);
         }
     };
 
@@ -77,6 +111,7 @@ public final class MclaActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle state) {
+        applyGraphicsEnvironment();
         applyAudioEnvironment();
         MclaKeyboardMouse.apply(this);
         applyRedMagicShaderEnvironment();
@@ -84,38 +119,136 @@ public final class MclaActivity extends SDLActivity {
         applyDriverDebugEnvironment();
         File source = new File(getApplicationInfo().nativeLibraryDir, "librexgpu-xenos.so");
         File target = new File(getFilesDir(), "librexgpu-xenos.so");
-        try (FileInputStream input = new FileInputStream(source);
-             FileOutputStream output = new FileOutputStream(target)) {
-            byte[] buffer = new byte[64 * 1024];
-            int count;
-            while ((count = input.read(buffer)) != -1) {
-                output.write(buffer, 0, count);
+        boolean needsPluginCopy = !target.isFile()
+                || target.length() != source.length()
+                || target.lastModified() < source.lastModified();
+        if (needsPluginCopy) {
+            try (FileInputStream input = new FileInputStream(source);
+                 FileOutputStream output = new FileOutputStream(target)) {
+                byte[] buffer = new byte[64 * 1024];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, count);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Could not stage the Xenos Vulkan plugin", e);
             }
-        } catch (Exception e) {
-            Log.e(TAG, "Could not stage the Xenos Vulkan plugin", e);
         }
         super.onCreate(state);
+        applySurfaceScale();
         if (mLayout != null) {
             touchControls = new MclaTouchControls(this);
             mLayout.addView(touchControls, new RelativeLayout.LayoutParams(
                     RelativeLayout.LayoutParams.MATCH_PARENT,
                     RelativeLayout.LayoutParams.MATCH_PARENT));
+            if (fpsOverlayEnabled) {
+                fpsOverlayView = createFpsOverlayView();
+                RelativeLayout.LayoutParams hudParams = new RelativeLayout.LayoutParams(
+                        RelativeLayout.LayoutParams.WRAP_CONTENT,
+                        RelativeLayout.LayoutParams.WRAP_CONTENT);
+                hudParams.addRule(RelativeLayout.ALIGN_PARENT_TOP);
+                hudParams.addRule(RelativeLayout.ALIGN_PARENT_LEFT);
+                hudParams.setMargins(dp(12), dp(10), 0, 0);
+                mLayout.addView(fpsOverlayView, hudParams);
+            }
             inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
-            if (inputManager != null) inputManager.registerInputDeviceListener(gamepadListener, logHandler);
+            if (inputManager != null) inputManager.registerInputDeviceListener(gamepadListener, uiHandler);
             updateGamepad();
         }
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         if (Build.VERSION.SDK_INT >= 24) {
+            boolean sustained = getSharedPreferences("graphics", MODE_PRIVATE)
+                    .getBoolean("sustained_perf", false);
             PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (power != null && power.isSustainedPerformanceModeSupported()) {
-                getWindow().setSustainedPerformanceMode(true);
-                Log.i(TAG, "Sustained performance mode enabled");
+                getWindow().setSustainedPerformanceMode(sustained);
+                Log.i(TAG, sustained
+                        ? "Sustained performance mode enabled"
+                        : "Sustained performance mode disabled (full Snapdragon/Adreno boost allowed)");
             } else {
                 Log.i(TAG, "Sustained performance mode unavailable");
             }
         }
         applyImmersiveMode();
+    }
+
+    private TextView createFpsOverlayView() {
+        TextView view = new TextView(this);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xB4000000);
+        bg.setCornerRadius(dp(8));
+        bg.setStroke(Math.max(1, dp(1)), 0x3870DFCA);
+        view.setBackground(bg);
+        view.setPadding(dp(8), dp(4), dp(8), dp(4));
+        view.setTextColor(Color.WHITE);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        view.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        view.setIncludeFontPadding(false);
+        view.setClickable(false);
+        view.setFocusable(false);
+        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        view.setVisibility(View.GONE);
+        return view;
+    }
+
+    private void applySurfaceScale() {
+        if (mSurface == null) return;
+        SurfaceHolder holder = mSurface.getHolder();
+        if (holder == null) return;
+        int targetH = getSharedPreferences("graphics", MODE_PRIVATE)
+                .getInt("surface_height", 720);
+        DisplayMetrics realMetrics = new DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(realMetrics);
+        int rawW = Math.max(realMetrics.widthPixels, realMetrics.heightPixels);
+        int rawH = Math.min(realMetrics.widthPixels, realMetrics.heightPixels);
+        if (targetH > 0 && rawH > targetH) {
+            int scaledH = targetH & ~1;
+            int scaledW = (Math.round((float) rawW * (float) scaledH / (float) rawH) + 1) & ~1;
+            holder.setFixedSize(scaledW, scaledH);
+            Log.i(TAG, "Surface hardware DPU scaler: " + scaledW + "x" + scaledH
+                    + " -> panel " + rawW + "x" + rawH);
+        } else {
+            holder.setSizeFromLayout();
+            Log.i(TAG, "Surface native panel resolution: " + rawW + "x" + rawH);
+        }
+    }
+
+    private void applyGraphicsEnvironment() {
+        SharedPreferences prefs = getSharedPreferences("graphics", MODE_PRIVATE);
+        int profile = prefs.getInt("profile", 0);
+        fpsOverlayEnabled = prefs.getBoolean("fps_overlay", true);
+        try {
+            Os.setenv("REX_MCLA_FPS_OVERLAY", fpsOverlayEnabled ? "true" : "false", true);
+            if (profile == 2) {
+                // Maximum FPS: full low preset (quarter-rate cubemaps/reflections, MSAA off).
+                Os.setenv("REX_MCLA_PRESET", "low", true);
+                Os.unsetenv("REX_MCLA_ANTI_ALIASING");
+                Os.unsetenv("REX_MCLA_FAR_SHADOW_INTERVAL");
+                Os.unsetenv("REX_MCLA_ENV_MAP_INTERVAL");
+                Os.unsetenv("REX_MCLA_REFLECTION_INTERVAL");
+                Log.i(TAG, "Graphics profile: maximum FPS (low preset)");
+            } else if (profile == 1) {
+                // Console original: 2x MSAA, every-frame reflections and shadows.
+                Os.unsetenv("REX_MCLA_PRESET");
+                Os.unsetenv("REX_MCLA_ANTI_ALIASING");
+                Os.unsetenv("REX_MCLA_FAR_SHADOW_INTERVAL");
+                Os.unsetenv("REX_MCLA_ENV_MAP_INTERVAL");
+                Os.unsetenv("REX_MCLA_REFLECTION_INTERVAL");
+                Log.i(TAG, "Graphics profile: console original");
+            } else {
+                // Balanced mobile (default): MSAA off (eliminates 2x EDRAM resolve bandwidth),
+                // half-rate cubemap & road reflections; far shadows stay every-frame to avoid flicker.
+                Os.unsetenv("REX_MCLA_PRESET");
+                Os.setenv("REX_MCLA_ANTI_ALIASING", "off", true);
+                Os.unsetenv("REX_MCLA_FAR_SHADOW_INTERVAL");
+                Os.setenv("REX_MCLA_ENV_MAP_INTERVAL", "2", true);
+                Os.setenv("REX_MCLA_REFLECTION_INTERVAL", "2", true);
+                Log.i(TAG, "Graphics profile: balanced mobile (MSAA off, 1/2 env+reflection passes)");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Could not apply graphics environment", e);
+        }
     }
 
     private void applyLogEnvironment() {
@@ -136,21 +269,20 @@ public final class MclaActivity extends SDLActivity {
     }
 
     private void applyAudioEnvironment() {
-        // The native side reads the cvar, which accepts a REX_ environment
-        // override. Set it before the runtime starts.
+        // Force 2-channel stereo output on Android (avoids 6-channel 5.1 mixing
+        // overhead on phone speakers/headphones) and apply user latency mode.
         boolean stereoTest = MclaBuildVariant.isRedMagicAudioTest(this);
         boolean lowLatency = !stereoTest && getSharedPreferences("audio", MODE_PRIVATE)
                 .getBoolean("low_latency", false);
         try {
+            Os.setenv("REX_AUDIO_ANDROID_FORCE_STEREO", "true", true);
             if (stereoTest) {
-                Os.setenv("REX_AUDIO_ANDROID_FORCE_STEREO", "true", true);
                 boolean adaptive = getSharedPreferences("redmagic_diagnostics", MODE_PRIVATE)
                         .getBoolean("adaptive_queue", false);
                 Os.setenv("REX_AUDIO_ADAPTIVE_QUEUE", adaptive ? "true" : "false", true);
                 Log.i(TAG, "RedMagic audio diagnostic: stereo output, normal mixer, adaptive queue="
                         + adaptive);
             } else {
-                Os.unsetenv("REX_AUDIO_ANDROID_FORCE_STEREO");
                 Os.unsetenv("REX_AUDIO_ADAPTIVE_QUEUE");
             }
             if (lowLatency) {
@@ -217,13 +349,14 @@ public final class MclaActivity extends SDLActivity {
                 // Turnip debug flags must never leak to system Vulkan or PanVK.
                 debug = null;
             } else if (debug == null) {
-                // Launcher setting; explicit driver.env takes precedence.
+                // Default to "" (no debug switch) so Turnip runs at full async speed
+                // instead of serializing every draw call with syncdraw.
                 debug = getSharedPreferences("driver_debug", MODE_PRIVATE)
-                        .getString("tu_debug", "syncdraw");
+                        .getString("tu_debug_v2", "");
                 if (!debug.equals("syncdraw") && !debug.equals("noubwc") &&
                         !debug.equals("flushall") && !debug.equals("nolrz") &&
                         !debug.equals("sysmem")) {
-                    debug = null;  // Includes the explicit "No switch" selection.
+                    debug = null;
                 }
             }
             if (debug != null) {
@@ -256,16 +389,20 @@ public final class MclaActivity extends SDLActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
         requestAudioFocus();
         updateGamepad();
         if (touchControls != null) touchControls.resumeControls();
-        logHandler.removeCallbacks(exportLogs);
-        logHandler.postDelayed(exportLogs, 30_000);
+        uiHandler.removeCallbacks(perfOverlayTick);
+        if (fpsOverlayEnabled && fpsOverlayView != null) {
+            uiHandler.postDelayed(perfOverlayTick, 500);
+        }
     }
 
     @Override
     protected void onPause() {
-        logHandler.removeCallbacks(exportLogs);
+        activityResumed = false;
+        uiHandler.removeCallbacks(perfOverlayTick);
         if (touchControls != null) touchControls.clearInput();
         abandonAudioFocus();
         super.onPause();
@@ -274,7 +411,8 @@ public final class MclaActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
-        logHandler.removeCallbacks(exportLogs);
+        activityResumed = false;
+        uiHandler.removeCallbacks(perfOverlayTick);
         if (inputManager != null) inputManager.unregisterInputDeviceListener(gamepadListener);
         if (touchControls != null) touchControls.clearInput();
         MclaLogExporter.exportAsync(this);

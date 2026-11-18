@@ -636,6 +636,10 @@ class PcTriggers {
                     REXCVAR_GET(mcla_trigger_release_unfocused) ? "yes" : "no");
       }
     }
+    if (pads_.empty()) {
+      engaged_.store(false, std::memory_order_relaxed);
+      return 500;
+    }
     std::string state;
     Wanted wanted = Decide(now, state);
     const bool engaged = state.empty();

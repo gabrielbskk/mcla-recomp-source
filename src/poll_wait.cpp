@@ -64,6 +64,13 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__ANDROID__) || defined(__linux__)
+#include <cerrno>
+#include <climits>
+#include <ctime>
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 REXCVAR_DEFINE_BOOL(mcla_poll_wait, false, "MCLA",
@@ -699,11 +706,124 @@ bool mcla_poll_wait(PPCRegister& r31, PPCRegister& r30, PPCRegister& r29, PPCReg
     g_stats.tail_deadline.fetch_add(1, std::memory_order_relaxed);
   }
   return true;
+#elif defined(__ANDROID__) || defined(__linux__)
+  if (!REXCVAR_GET(mcla_poll_wait)) {
+    return false;
+  }
+  uint8_t* base = GuestBase();
+  if (!base) {
+    return false;
+  }
+  static auto cpu_relax = [] {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    __asm__ volatile("yield" ::: "memory");
+#elif defined(__x86_64__)
+    __builtin_ia32_pause();
+#endif
+  };
+  const uint32_t ring = (uint32_t(base[r31.u32 + 199]) >> 2) & 0x3FFFFFF8u;
+  volatile uint32_t* word = reinterpret_cast<volatile uint32_t*>(base + r30.u32 + 4 + ring);
+  const uint32_t expected = Swap32(r29.u32);
+  const bool stats = REXCVAR_GET(mcla_poll_stats);
+  if (stats) {
+    g_stats.calls.fetch_add(1, std::memory_order_relaxed);
+    MaybeLog();
+  }
+  const int64_t entered_ns = SteadyNowNs();
+  const int32_t left_us = static_cast<int32_t>(r26.u32 - r3.u32);
+  if (left_us <= 0) {
+    if (stats) {
+      g_stats.no_time_left.fetch_add(1, std::memory_order_relaxed);
+    }
+    return true;
+  }
+  const int64_t deadline_ns = entered_ns + int64_t(left_us) * 1000LL;
+  const int64_t spin_end_ns =
+      entered_ns + int64_t(std::clamp(REXCVAR_GET(mcla_poll_spin_us), 0, 2000)) * 1000LL;
+  extern std::atomic<uint32_t> g_mcla_poll_release_seq;
+  extern std::atomic<uint32_t> g_mcla_poll_waiters;
+  const uint32_t seq = g_mcla_poll_release_seq.load(std::memory_order_acquire);
+  int64_t now_ns = entered_ns;
+  for (;;) {
+    for (int i = 0; i < 16; ++i) {
+      if (*word != expected) {
+        if (stats) {
+          g_stats.done_in_spin.fetch_add(1, std::memory_order_relaxed);
+        }
+        return true;
+      }
+      cpu_relax();
+    }
+    now_ns = SteadyNowNs();
+    if (now_ns >= spin_end_ns || now_ns >= deadline_ns) {
+      break;
+    }
+  }
+#if defined(__ANDROID__)
+  // Linux high-res timers on Android overshoot less than Windows timers; keep
+  // the tail spin short when using the default so the Prime core actually sleeps.
+  const int32_t configured_tail_us = std::clamp(REXCVAR_GET(mcla_poll_tail_us), 0, 1000);
+  const int64_t tail_ns = int64_t(
+      rex::cvar::GetFlagSource("mcla_poll_tail_us") == rex::cvar::Source::kDefault
+          ? std::min(configured_tail_us, 120)
+          : configured_tail_us) * 1000LL;
+#else
+  const int64_t tail_ns = int64_t(std::clamp(REXCVAR_GET(mcla_poll_tail_us), 0, 1000)) * 1000LL;
+#endif
+  const int64_t sleep_ns = deadline_ns - tail_ns - now_ns;
+  if (sleep_ns >= 150'000LL && *word == expected) {
+    struct timespec ts;
+    ts.tv_sec = static_cast<time_t>(sleep_ns / 1'000'000'000LL);
+    ts.tv_nsec = static_cast<long>(sleep_ns % 1'000'000'000LL);
+    g_mcla_poll_waiters.fetch_add(1, std::memory_order_seq_cst);
+    long rc = -1;
+    int err = 0;
+    if (*word == expected) {
+      rc = syscall(SYS_futex, reinterpret_cast<uint32_t*>(&g_mcla_poll_release_seq),
+                   FUTEX_WAIT_PRIVATE, seq, &ts, nullptr, 0);
+      err = errno;
+    }
+    g_mcla_poll_waiters.fetch_sub(1, std::memory_order_relaxed);
+    const bool woke_early = (rc == 0 || err == EAGAIN || *word != expected);
+    if (stats) {
+      g_stats.slept.fetch_add(1, std::memory_order_relaxed);
+      (woke_early ? g_stats.woken_by_release : g_stats.woken_by_timer)
+          .fetch_add(1, std::memory_order_relaxed);
+    }
+    if (woke_early) {
+      return true;
+    }
+  } else if (stats) {
+    g_stats.no_sleep.fetch_add(1, std::memory_order_relaxed);
+  }
+  for (;;) {
+    for (int i = 0; i < 16; ++i) {
+      if (*word != expected) {
+        if (stats) {
+          g_stats.tail_changed.fetch_add(1, std::memory_order_relaxed);
+        }
+        return true;
+      }
+      cpu_relax();
+    }
+    if (SteadyNowNs() >= deadline_ns) {
+      break;
+    }
+  }
+  if (stats) {
+    g_stats.tail_deadline.fetch_add(1, std::memory_order_relaxed);
+  }
+  return true;
 #else
   (void)r31, (void)r30, (void)r29, (void)r26, (void)r3;
   return false;
 #endif
 }
+
+#if defined(__ANDROID__) || defined(__linux__)
+std::atomic<uint32_t> g_mcla_poll_release_seq{0};
+std::atomic<uint32_t> g_mcla_poll_waiters{0};
+#endif
 
 // 0x82160140 in sub_82160088, after `stw r11,4(r6)`: r6 = 0x82836814, so the word at r6+4 has just
 // been set; wake the main thread if it sleeps. This is the only store to a word at +4 in the game
@@ -717,6 +837,17 @@ void mcla_poll_release(PPCRegister& r6) {
   }
   if (REXCVAR_GET(mcla_poll_wait)) {
     SetEvent(ReleaseEvent());
+  }
+#elif defined(__ANDROID__) || defined(__linux__)
+  if (REXCVAR_GET(mcla_poll_stats)) {
+    g_stats.releases.fetch_add(1, std::memory_order_relaxed);
+  }
+  if (REXCVAR_GET(mcla_poll_wait)) {
+    g_mcla_poll_release_seq.fetch_add(1, std::memory_order_seq_cst);
+    if (g_mcla_poll_waiters.load(std::memory_order_acquire) != 0) {
+      syscall(SYS_futex, reinterpret_cast<uint32_t*>(&g_mcla_poll_release_seq),
+              FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
+    }
   }
 #endif
 }

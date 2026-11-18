@@ -264,13 +264,20 @@ void WaitForFrameDeadline() {
   if (now < next_us) {
     // Sleep most of the way, then spin the last stretch: sleeps overshoot by
     // up to a millisecond or two, which is a large share of an 8.3 ms frame.
+    // Mobile SoCs share TDP with the GPU, so keep the final spin short there.
+#if defined(__ANDROID__)
+    constexpr uint64_t kSpinMicros = 150;
+#else
     constexpr uint64_t kSpinMicros = 1500;
+#endif
     if (next_us - now > kSpinMicros + 500) {
       std::this_thread::sleep_for(std::chrono::microseconds(next_us - now - kSpinMicros));
     }
     while (NowMicros() < next_us) {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(_M_X64) || defined(__x86_64__)
       _mm_pause();
+#elif defined(__aarch64__) || defined(_M_ARM64)
+      __asm__ volatile("yield" ::: "memory");
 #else
       std::this_thread::yield();
 #endif
@@ -1837,6 +1844,9 @@ void UiInterpDraw(PPCRegister& r30, PPCRegister& r31, bool apply_opt, bool log) 
   // Worth doing only when several frames are drawn per step; else it would only add delay.
   const bool fast_enough = frame_us && uint64_t(frame_us) * 10 <= uint64_t(period_us) * 6;
   const bool apply = apply_opt && fast_enough;
+  if (!apply && !log) {
+    return;
+  }
   const uint32_t calls = step->calls.load(std::memory_order_relaxed);
   const uint64_t window_us =
       std::max<uint64_t>(1, uint64_t(period_us) * uint64_t(std::clamp(REXCVAR_GET(mcla_ui_interp_window_pct), 10, 100)) / 100);
@@ -2244,6 +2254,9 @@ bool UiSceneBlend(uint32_t ctx, uint32_t obj, const SceneSpec& spec, float* v, i
   }
   // As for the display list: nothing to gain with fewer than two frames per step.
   const bool apply = apply_opt && frame_us && uint64_t(frame_us) * 10 <= uint64_t(period_us) * 6;
+  if (!apply && !log) {
+    return false;
+  }
   const uint32_t calls = step->calls.load(std::memory_order_relaxed);
   const uint64_t window_us =
       std::max<uint64_t>(1, uint64_t(period_us) * uint64_t(std::clamp(REXCVAR_GET(mcla_ui_interp_window_pct), 10, 100)) / 100);

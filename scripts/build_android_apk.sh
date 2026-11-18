@@ -2,14 +2,18 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-OUT="$ROOT/out/android-arm64"
-SDK="$ROOT/out/android-sdk"
-PLATFORM="$SDK/android-35/android.jar"
-D8="$SDK/build-tools-35.0.1/android-15/lib/d8.jar"
-SDL="$ROOT/third_party/rexglue-sdk/thirdparty/sdl3/android-project/app/src/main/java"
-LIBS="$ROOT/out/build/mcla-android-arm64"
-RUNTIME="$ROOT/third_party/rexglue-sdk/out/install/android-arm64/lib"
-ADRENO="$ROOT/out/build/adrenotools-arm64"
+OUT=${MCLA_OUT_DIR:-"$ROOT/out/android-arm64"}
+SDK=${MCLA_ANDROID_SDK:-"$ROOT/out/android-sdk"}
+PLATFORM=${MCLA_PLATFORM_JAR:-"$SDK/android-35/android.jar"}
+D8=${MCLA_D8_JAR:-"$SDK/build-tools-35.0.1/android-15/lib/d8.jar"}
+if [ ! -f "$D8" ] && [ -f "$SDK/android-15/lib/d8.jar" ]; then
+    D8="$SDK/android-15/lib/d8.jar"
+fi
+SDL=${MCLA_SDL_JAVA:-"$ROOT/third_party/rexglue-sdk/thirdparty/sdl3/android-project/app/src/main/java"}
+LIBS=${MCLA_LIBS_DIR:-"$ROOT/out/build/mcla-android-arm64"}
+RUNTIME=${MCLA_RUNTIME_LIB_DIR:-"$ROOT/third_party/rexglue-sdk/out/install/android-arm64/lib"}
+ADRENO=${MCLA_ADRENO_BUILD_DIR:-"$ROOT/out/build/adrenotools-arm64"}
+LIBCXX_SHARED=${MCLA_LIBCXX_SHARED:-"${PREFIX:-/data/data/com.termux/files/usr}/lib/libc++_shared.so"}
 LOCAL_SHARE_DIR=${MCLA_LOCAL_SHARE_DIR:-${PREFIX:-/data/data/com.termux/files/usr}/share/mcla-recomp}
 DEFAULT_KEYSTORE="$LOCAL_SHARE_DIR/android-debug.keystore"
 VERSION_STATE_FILE=${MCLA_VERSION_STATE_FILE:-$LOCAL_SHARE_DIR/version-code}
@@ -65,6 +69,9 @@ for archive_name, url, members in downloads:
         for member in members:
             zf.extract(member, root)
 PY
+    if [ ! -f "$D8" ] && [ -f "$SDK/android-15/lib/d8.jar" ]; then
+        D8="$SDK/android-15/lib/d8.jar"
+    fi
 fi
 
 for tool in javac java aapt2 apksigner zipalign keytool readelf; do
@@ -74,6 +81,7 @@ for lib in libmain.so; do
     [ -f "$LIBS/$lib" ] || { echo "Build $lib first" >&2; exit 1; }
 done
 [ -f "$RUNTIME/librexgpu-xenos.so" ] || { echo "Build and install librexgpu-xenos.so first" >&2; exit 1; }
+[ -f "$LIBCXX_SHARED" ] || { echo "Missing libc++_shared.so at $LIBCXX_SHARED" >&2; exit 1; }
 for lib in "$ADRENO/libadrenotools.so" "$ADRENO/src/hook/libhook_impl.so" \
            "$ADRENO/src/hook/libmain_hook.so" \
            "$ADRENO/src/hook/libfile_redirect_hook.so" \
@@ -110,8 +118,23 @@ aapt2 link -o "$OUT/stage/apk/base.apk" -I "$PLATFORM" \
 cp "$LIBS/libmain.so" "$OUT/stage/jni/arm64-v8a/"
 cp "$RUNTIME/librexgpu-xenos.so" "$OUT/stage/jni/arm64-v8a/"
 cp "$RUNTIME/libSDL3.so" "$RUNTIME/librexruntime.so" "$OUT/stage/jni/arm64-v8a/"
-cp "${PREFIX:?Termux PREFIX is required}/lib/libc++_shared.so" "$OUT/stage/jni/arm64-v8a/"
+cp "$LIBCXX_SHARED" "$OUT/stage/jni/arm64-v8a/"
 cp "$ADRENO/libadrenotools.so" "$ADRENO/src/hook/"*.so "$OUT/stage/jni/arm64-v8a/"
+
+STRIP_TOOL=${MCLA_STRIP_TOOL:-}
+if [ -z "$STRIP_TOOL" ]; then
+    for candidate in llvm-strip aarch64-linux-android-strip strip; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            STRIP_TOOL=$(command -v "$candidate")
+            break
+        fi
+    done
+fi
+if [ -n "$STRIP_TOOL" ]; then
+    for sofile in "$OUT/stage/jni/arm64-v8a/"*.so; do
+        "$STRIP_TOOL" --strip-unneeded "$sofile" 2>/dev/null || true
+    done
+fi
 
 python3 - "$OUT/stage/jni/arm64-v8a" <<'PY'
 import pathlib, subprocess, sys

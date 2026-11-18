@@ -8,6 +8,12 @@ project(mcla LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(ANDROID AND NOT DEFINED CACHE{REXGLUE_RECOMP_DEBUG_INFO})
+    # Keep release APKs lean and fast to load: src/crash_trace.cpp needs no DWARF line tables.
+    set(REXGLUE_RECOMP_DEBUG_INFO "none" CACHE STRING
+        "Debug info level for generated code: line-tables-only, full, or none")
+endif()
+
 include(generated/rexglue.cmake)
 
 if(MINGW)
@@ -93,6 +99,44 @@ endif()
 
 if(ANDROID)
     rexglue_setup_target(mcla GPU_PLUGINS xenos)
+
+    # Resolve all 29,848 recompiled guest functions directly instead of routing
+    # every inter-function branch through PLT/GOT indirection in libmain.so, and
+    # enable ARMv8.2 LSE hardware atomics + Snapdragon scheduling in Release.
+    set(_mcla_android_opt_flags
+        -O3
+        -march=armv8.2-a+lse+fp16+dotprod
+        -mtune=cortex-a715
+        -fno-math-errno
+        -fdata-sections
+        -ffunction-sections)
+    target_compile_options(mcla PRIVATE
+        $<$<CONFIG:Release,RelWithDebInfo>:${_mcla_android_opt_flags}>)
+    if(TARGET mcla_recomp)
+        set_target_properties(mcla_recomp PROPERTIES
+            CXX_VISIBILITY_PRESET hidden
+            C_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON)
+        # Midnight Club: Los Angeles has 0 guest exception scopes; omitting unwind
+        # tables shrinks libmain.so by tens of MB and improves prologue scheduling.
+        target_compile_options(mcla_recomp PRIVATE
+            $<$<CONFIG:Release,RelWithDebInfo>:${_mcla_android_opt_flags}>
+            -fno-unwind-tables
+            -fno-asynchronous-unwind-tables)
+    endif()
+    target_link_options(mcla PRIVATE
+        "-Wl,-Bsymbolic-functions"
+        "-Wl,--gc-sections"
+        "-Wl,-O2")
+
+    get_filename_component(_mcla_compiler_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    find_program(MCLA_STRIP NAMES llvm-strip strip HINTS "${_mcla_compiler_dir}")
+    if(MCLA_STRIP)
+        add_custom_command(TARGET mcla POST_BUILD
+            COMMAND $<$<CONFIG:Release>:${MCLA_STRIP}> $<$<CONFIG:Release>:--strip-unneeded> $<$<CONFIG:Release>:$<TARGET_FILE:mcla>>
+            COMMENT "Stripping unneeded symbols from libmain.so"
+            VERBATIM)
+    endif()
 else()
     rexglue_setup_target(mcla)
 endif()

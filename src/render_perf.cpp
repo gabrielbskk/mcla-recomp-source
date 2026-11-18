@@ -311,6 +311,8 @@ bool mcla_fence_spin() {
   } else {
 #if defined(_M_X64) || defined(__x86_64__)
     _mm_pause();
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    __asm__ volatile("yield" ::: "memory");
 #endif
   }
   return true;

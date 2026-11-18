@@ -12,4 +12,5 @@ struct GameUpdateStats {
 // Guest engine timer updates, not host presentation or display scanout.
 void RecordGameUpdate();
 GameUpdateStats GetGameUpdateStats();
+void MclaTickVideoBorders();
 }  // namespace mcla

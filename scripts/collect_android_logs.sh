@@ -5,9 +5,9 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DEST="$ROOT/out/logs/android-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$DEST"
 
-LATEST=$(su -c 'ls -t /data/user/0/org.mcla.recomp/files/logs/mcla_*.log' | head -1)
+LATEST=$(su -c 'ls -t /data/user/0/org.mcla.recomp/files/logs/mcla*.log' | head -1)
 case "$LATEST" in
-    /data/user/0/org.mcla.recomp/files/logs/mcla_*.log) ;;
+    /data/user/0/org.mcla.recomp/files/logs/mcla*.log) ;;
     *) echo "MCLA log not found" >&2; exit 1 ;;
 esac
 su -c "cat '$LATEST'" > "$DEST/mcla.log"

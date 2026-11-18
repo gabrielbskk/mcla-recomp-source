@@ -11,10 +11,10 @@
 # bits, truncate, or convert an integer), so they run in whichever mode the code is in and no longer force
 # the scalar mode, and the switch back to the vector mode that followed it. Checked bit for bit in both modes,
 # in all four rounding modes, by scripts/ci/csr-exact.ps1.
-csr_mode_free_ops = false
+csr_mode_free_ops = true
 
 # A switch writes a constant MXCSR word when the guest's rounding mode is "to nearest" (where the game keeps
 # it), instead of building the word from the shadow in the context and passing it through the stack; any other
-# rounding mode, and any CPU but x86-64, keeps the old code. The value written differs from the old one only in
-# the exception flag bits, which nothing reads.
-csr_cheap_switch = false
+# rounding mode, and any CPU but x86-64, keeps the old code (with [[unlikely]] slow-path hint on ARM64).
+# The value written differs from the old one only in the exception flag bits, which nothing reads.
+csr_cheap_switch = true

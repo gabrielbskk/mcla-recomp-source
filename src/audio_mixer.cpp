@@ -39,6 +39,11 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 
+#if defined(__ANDROID__) || defined(__linux__)
+#include <cerrno>
+#include <sys/resource.h>
+#endif
+
 REXCVAR_DEFINE_INT32(audio_mixer_priority, 0, "MCLA",
                      "Host priority of the game's own audio mixer thread (the guest thread that mixes each 5.33 ms "
                      "frame for the audio worker; its priority request is ignored): 0 = normal, 1 = above normal, "
@@ -154,6 +159,20 @@ extern "C" REX_FUNC(sub_823EC8C8) {
   if (level > 0) {
 #if defined(_WIN32)
     rex::audio::RaiseCallingAudioThread(level, "audio mixer thread (guest entry 823EC8C8)");
+#elif defined(__ANDROID__) || defined(__linux__)
+    const int targets[] = {level >= 2 ? -16 : -8, -10, -8, -4};
+    bool applied = false;
+    for (int nice_val : targets) {
+      if (setpriority(PRIO_PROCESS, 0, nice_val) == 0) {
+        REXLOG_INFO("audio mixer thread (guest entry 823EC8C8): nice set to {} (audio_mixer_priority={})",
+                    nice_val, level);
+        applied = true;
+        break;
+      }
+    }
+    if (!applied) {
+      REXLOG_WARN("audio mixer thread: setpriority failed (errno={})", errno);
+    }
 #else
     REXLOG_WARN("audio_mixer_priority {} has no effect on this platform", level);
 #endif

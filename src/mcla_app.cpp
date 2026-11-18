@@ -1109,6 +1109,28 @@ void MclaApp::ApplyPcDefaults() {
       // the experimental 644-line mode repeatedly faulted during loading;
       // forcing 720 in mcla.toml allowed gameplay to start.
       {"mcla_render_height", "720"},
+      // Preserve Adreno UBWC lossless hardware compression on EDRAM-resolved
+      // textures by avoiding VK_IMAGE_USAGE_STORAGE_BIT + mutable UINT views.
+      {"texture_load_direct_unscaled", "false"},
+      // Invalidate 4 pages (16 KiB) per guest write fault instead of 64 pages
+      // (256 KiB / 1 MiB on 16K kernels), slashing mprotect + re-upload churn.
+      {"shared_memory_invalidation_pages_log2", "2"},
+      // Output 2-channel stereo on Android (compatible with AAudio FastTrack on
+      // Galaxy S23 and spatial audio on RedMagic, 3x less SDL sample bandwidth),
+      // isolate the audio client mutex from global_critical_region_, and raise
+      // both audio worker and guest mixer priorities.
+      {"audio_android_force_stereo", "true"},
+      {"audio_client_lock", "true"},
+      {"audio_adaptive_queue", "true"},
+      {"audio_thread_priority", "2"},
+      {"audio_mixer_priority", "2"},
+      // Replace main-thread ring-buffer spin with futex waits, wake the render
+      // pump on demand, yield cleanly during GPU fence waits, and disable
+      // Windows-only HDR render markers.
+      {"mcla_pump_wake_on_demand", "true"},
+      {"mcla_poll_wait", "true"},
+      {"mcla_fence_sleep_us", "50"},
+      {"mcla_render_markers", "false"},
 #endif
 #if REX_PLATFORM_WIN32
       {"d3d12_hoist_shared_memory_uploads", "true"},
@@ -1202,77 +1224,50 @@ void MclaApp::OnPostSetup() {
 
 namespace {
 
-#ifdef __ANDROID__
-class FpsCounter final : public rex::ui::ImGuiDialog {
- public:
-  explicit FpsCounter(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
-  // OnDraw samples the presenter and writes the periodic log. Without UI
-  // repaints neither happens if the guest presents off the UI thread.
-  bool RepaintsContinuously() const override {
-    return REXCVAR_GET(mcla_fps_overlay) || REXCVAR_GET(mcla_fps_log);
-  }
-
- protected:
-  void OnDraw(ImGuiIO&) override {
-    const bool overlay = REXCVAR_GET(mcla_fps_overlay);
-    const bool logging = REXCVAR_GET(mcla_fps_log);
-    if (!overlay && !logging) return;
-    const auto now = std::chrono::steady_clock::now();
-    if (now - sampled_ >= std::chrono::milliseconds(500)) {
-      sampled_ = now;
-      auto* runtime = rex::Runtime::instance();
-      auto* graphics = runtime ? runtime->graphics_system() : nullptr;
-      auto* presenter = graphics ? graphics->presenter() : nullptr;
-      if (!presenter) return;
-      auto times = presenter->GetRecentPresentationTimes();
-      const uint64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-          now.time_since_epoch()).count();
-      const uint64_t cutoff = now_ns > 2'000'000'000 ? now_ns - 2'000'000'000 : 0;
-      times.erase(times.begin(), std::lower_bound(times.begin(), times.end(), cutoff));
-      fps_ = p50_ = p95_ = 0;
-      if (times.size() >= 2 && times.back() > times.front()) {
-        fps_ = double(times.size() - 1) * 1e9 / double(times.back() - times.front());
-        std::vector<double> intervals;
-        for (size_t i = 1; i < times.size(); ++i) {
-          intervals.push_back(double(times[i] - times[i - 1]) / 1e6);
-        }
-        std::sort(intervals.begin(), intervals.end());
-        p50_ = intervals[(intervals.size() - 1) / 2];
-        p95_ = intervals[(intervals.size() * 95 + 99) / 100 - 1];
-      }
-      if (logging && now - logged_ >= std::chrono::seconds(5)) {
-        logged_ = now;
-        REXLOG_INFO("host presentation (recent 2s): {:.2f} FPS, p50 {:.2f} ms, p95 {:.2f} ms; "
-                    "{} samples, not display scanout", fps_, p50_, p95_, times.size());
-      }
-    }
-    if (overlay) {
-      char text[80];
-      const auto game = mcla::GetGameUpdateStats();
-      if (game.samples) {
-        std::snprintf(text, sizeof(text), "Game updates %.1f FPS  p95 %.0f ms",
-                      game.fps, game.p95_ms);
-      } else {
-        std::snprintf(text, sizeof(text), "Game updates --");
-      }
-      auto* draw = ImGui::GetForegroundDrawList();
-      const ImVec2 size = ImGui::CalcTextSize(text);
-      draw->AddRectFilled(ImVec2(10, 10), ImVec2(22 + size.x, 22 + size.y),
-                          IM_COL32(0, 0, 0, 180), 4);
-      draw->AddText(ImVec2(16, 16), IM_COL32(255, 255, 255, 255), text);
-    }
-  }
-
- private:
-  std::chrono::steady_clock::time_point sampled_{}, logged_{};
-  double fps_ = 0, p50_ = 0, p95_ = 0;
-};
-#endif
-
 class VideoBorders final : public rex::ui::ImGuiDialog {
  public:
-  explicit VideoBorders(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
+  VideoBorders(rex::ui::ImGuiDrawer* drawer, rex::ui::WindowedAppContext& app_context)
+      : ImGuiDialog(drawer),
+        drawer_(drawer),
+        app_context_(app_context),
+        self_(std::make_shared<std::atomic<VideoBorders*>>(this)) {
+    // Keep the ImGui drawer detached from VulkanPresenter during gameplay so
+    // no UI overlay textures or full-screen composite passes run unless a
+    // 16:9 Bink movie is actively playing on a wider screen.
+    if (drawer_) {
+      drawer_->RemoveDialog(this);
+    }
+  }
+
+  ~VideoBorders() override { self_->store(nullptr); }
+
   bool RepaintsContinuously() const override { return false; }
+
+  void TickFromGuest() {
+    auto* runtime = rex::Runtime::instance();
+    const uint8_t* base = runtime ? runtime->virtual_membase() : nullptr;
+    bool playing = false;
+    if (base) {
+      auto word = [base](uint32_t address) {
+        return (uint32_t(base[address]) << 24) | (uint32_t(base[address + 1]) << 16) |
+               (uint32_t(base[address + 2]) << 8) | base[address + 3];
+      };
+      const uint32_t manager = word(0x82879410);
+      playing = manager >= 0x10000 && manager <= 0xDFFFFF00 && word(manager + 76) != 0;
+    }
+    bool expected = !playing;
+    if (attached_.compare_exchange_strong(expected, playing, std::memory_order_acq_rel)) {
+      app_context_.CallInUIThread([self = self_, playing] {
+        if (VideoBorders* borders = self->load()) {
+          if (playing) {
+            borders->drawer_->AddDialog(borders);
+          } else {
+            borders->drawer_->RemoveDialog(borders);
+          }
+        }
+      });
+    }
+  }
 
  protected:
   void OnDraw(ImGuiIO& io) override {
@@ -1292,23 +1287,38 @@ class VideoBorders final : public rex::ui::ImGuiDialog {
     draw->AddRectFilled(ImVec2(0, 0), ImVec2(side, size.y), IM_COL32(0, 0, 0, 255));
     draw->AddRectFilled(ImVec2(size.x - side, 0), size, IM_COL32(0, 0, 0, 255));
   }
+
+ private:
+  rex::ui::ImGuiDrawer* drawer_;
+  rex::ui::WindowedAppContext& app_context_;
+  std::shared_ptr<std::atomic<VideoBorders*>> self_;
+  std::atomic<bool> attached_{false};
 };
 
+std::atomic<VideoBorders*> g_video_borders{nullptr};
+
+}  // namespace
+
+namespace mcla {
+void MclaTickVideoBorders() {
+  if (VideoBorders* borders = g_video_borders.load(std::memory_order_acquire)) {
+    borders->TickFromGuest();
+  }
 }
+}  // namespace mcla
 
 void MclaApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
-#ifdef __ANDROID__
-  fps_counter_ = std::make_unique<FpsCounter>(drawer);
-#endif
   const auto* display = window();
   if (display && display->GetActualPhysicalHeight() &&
       uint64_t(display->GetActualPhysicalWidth()) * 9 >
           uint64_t(display->GetActualPhysicalHeight()) * 16) {
-    video_borders_ = std::make_unique<VideoBorders>(drawer);
+    auto borders = std::make_unique<VideoBorders>(drawer, app_context());
+    g_video_borders.store(borders.get(), std::memory_order_release);
+    video_borders_ = std::move(borders);
   }
 }
 
 void MclaApp::OnShutdown() {
-  fps_counter_.reset();
+  g_video_borders.store(nullptr, std::memory_order_release);
   video_borders_.reset();
 }
